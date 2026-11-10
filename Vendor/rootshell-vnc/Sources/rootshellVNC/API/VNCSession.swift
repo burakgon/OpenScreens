@@ -2314,7 +2314,7 @@ public final class VNCSession {
 
     /// Selected framebuffer rectangle in the server's normalized desktop
     /// coordinates. Nil means the server has not described its monitor layout.
-    var presentedFramebufferRegion: CGRect? {
+    public var presentedFramebufferRegion: CGRect? {
         // Match Client replaces the physical monitor topology with equal-sized
         // virtual displays. DisplayInfo from the pre-reconfiguration desktop
         // can remain in flight, so its rectangles are not authoritative here.
@@ -2330,13 +2330,13 @@ public final class VNCSession {
                 height: framebufferHeight))
     }
 
-    var presentedFramebufferSize: CGSize {
+    public var presentedFramebufferSize: CGSize {
         presentedFramebufferRegion?.size ?? CGSize(
             width: framebufferWidth,
             height: framebufferHeight)
     }
 
-    var presentedVideoDisplayRegions: [CGRect] {
+    public var presentedVideoDisplayRegions: [CGRect] {
         let count = max(1, activeVideoDisplayCount)
         if configuration.displaySizingMode != .matchClient,
            remoteDisplayRegions.count >= count {
