@@ -23,6 +23,20 @@ public struct OpenScreensScenes: Scene {
             LibraryView()
                 .environment(model)
                 .frame(minWidth: 720, minHeight: 440)
+                .onReceive(NotificationCenter.default.publisher(
+                    for: NSApplication.didBecomeActiveNotification)) { _ in
+                    // Look for computers and catch up with iCloud whenever
+                    // the app comes to the front; both are no-ops when
+                    // there is nothing new.
+                    model.becomeActive()
+                }
+                .onReceive(NotificationCenter.default.publisher(
+                    for: NSApplication.willTerminateNotification)) { _ in
+                    model.resignActive()
+                }
+                .task {
+                    model.becomeActive()
+                }
         }
         .defaultSize(width: 980, height: 640)
         // Always start with the library on screen, whichever windows were
@@ -150,6 +164,7 @@ struct SessionWindow: View {
         case .connecting, .idle: return "Connecting…"
         case .reconnecting: return "Reconnecting…"
         case .awaitingCredentials: return "Waiting for sign in"
+        case .awaitingHostKey: return "Verifying the SSH server"
         case .failed: return "Not connected"
         case .ended: return ""
         }

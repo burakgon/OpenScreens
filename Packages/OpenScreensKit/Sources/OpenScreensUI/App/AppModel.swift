@@ -12,6 +12,21 @@ public final class AppModel {
     public let credentials: CredentialStore
     public let sessions: SessionManager
 
+    /// Computers advertising screen sharing on the local network.
+    public let nearby: NearbyBrowser
+    /// Devices in the user's tailnet.
+    public let tailscale: TailscaleDirectory
+    /// Keeps the library the same on the user's devices through iCloud.
+    public let sync: CloudSyncEngine
+    public let sshKeys: SSHKeyStore
+    public let knownHosts: KnownHostsStore
+
+    /// Fixed lists shown instead of what is really out there, so previews
+    /// and screenshots do not show anyone's actual network.
+    public var sampleDiscovery: SampleDiscovery?
+
+    @ObservationIgnored private var settingsTask: Task<Void, Never>?
+
     /// A link waiting to be opened. Set from wherever the request arrives —
     /// a URL, a Shortcut, a widget — and consumed by the library, which is
     /// the one place that knows how to present a session.
@@ -29,16 +44,105 @@ public final class AppModel {
         let library = library ?? LibraryStore()
         let settings = settings ?? AppSettings()
         // An isolated run keeps its secrets in memory so it never reads from
-        // or writes to the user's keychain.
-        let credentials = credentials ?? (StorageLocation.isIsolated
-            ? CredentialStore(storage: InMemorySecretStorage())
-            : CredentialStore())
+        // or writes to the user's keychain, and stays out of iCloud.
+        let isIsolated = StorageLocation.isIsolated || credentials != nil
+        let secrets: any SecretStorage = isIsolated ? InMemorySecretStorage() : KeychainStorage()
+        let credentials = credentials ?? CredentialStore(storage: secrets)
+        let knownHosts = isIsolated && !StorageLocation.isIsolated
+            ? KnownHostsStore(fileURL: nil)
+            : KnownHostsStore()
+        let sshKeys = SSHKeyStore(storage: secrets)
         self.library = library
         self.settings = settings
         self.credentials = credentials
+        self.sshKeys = sshKeys
+        self.knownHosts = knownHosts
         self.sessions = SessionManager(
-            library: library, credentials: credentials, settings: settings)
+            library: library, credentials: credentials, settings: settings,
+            sshKeys: sshKeys, knownHosts: knownHosts)
+        self.nearby = NearbyBrowser()
+        self.tailscale = TailscaleDirectory(credentials: credentials) { [settings] in
+            settings.tailscaleEnabled ? .automatic(tailnet: settings.tailnet) : .off
+        }
+        self.sync = CloudSyncEngine(
+            library: library,
+            store: isIsolated ? nil : UbiquitousKeyValueCloudStore())
+        library.onChange = { [sync] document in
+            sync.libraryDidChange(document)
+        }
+        sync.isEnabled = settings.syncsWithICloud
         library.writeAutomaticBackupIfNeeded()
+        followSettings()
+    }
+
+    isolated deinit {
+        settingsTask?.cancel()
+    }
+
+    // MARK: - Discovery and sync
+
+    /// Starts what the app does while it is in use: looking for computers
+    /// and catching up with iCloud. Safe to call again.
+    public func becomeActive() {
+        applyDiscoverySettings()
+        sync.syncNow()
+    }
+
+    /// Stops looking and writes out anything unsaved, for when the app
+    /// leaves the screen.
+    public func resignActive() {
+        nearby.stop()
+        tailscale.stop()
+        library.saveNow()
+    }
+
+    private func applyDiscoverySettings() {
+        // Sample data stands in for the network.
+        guard sampleDiscovery == nil else { return }
+        if settings.showsNearbyComputers {
+            nearby.start()
+        } else {
+            nearby.stop()
+        }
+        if settings.tailscaleEnabled {
+            tailscale.startAutoRefresh()
+        } else {
+            tailscale.stop()
+        }
+    }
+
+    /// Applies preference changes that switch a service on or off.
+    private func followSettings() {
+        settingsTask = Task { [weak self, settings] in
+            let watched = Observations {
+                WatchedSettings(
+                    nearby: settings.showsNearbyComputers,
+                    tailscale: settings.tailscaleEnabled,
+                    tailnet: settings.tailnet,
+                    sync: settings.syncsWithICloud)
+            }
+            var isFirst = true
+            for await value in watched {
+                guard let self else { return }
+                // The first value is the state the model was built with.
+                if isFirst {
+                    isFirst = false
+                    continue
+                }
+                self.sync.isEnabled = value.sync
+                self.applyDiscoverySettings()
+                if value.tailscale {
+                    await self.tailscale.refresh()
+                }
+            }
+        }
+    }
+
+    private struct WatchedSettings: Equatable {
+        var nearby: Bool
+        var tailscale: Bool
+        var tailnet: String
+        var sync: Bool
     }
 
     /// A model with sample data that touches neither disk nor keychain.
@@ -71,13 +175,42 @@ public final class AppModel {
         library.delete(ids)
     }
 
-    /// Erases the library, saved passwords, previews and preferences.
-    public func eraseAllContent() {
+    /// Erases the library, trusted hosts, previews and preferences.
+    ///
+    /// - Parameter everywhere: Also remove the computers from the user's
+    ///   other devices, along with every saved password and SSH key. When
+    ///   false, iCloud sync is turned off here first and stays off, so what
+    ///   is in iCloud is neither changed nor brought back — and the keychain
+    ///   is left alone, because iCloud Keychain would carry a removal to the
+    ///   other devices too.
+    public func eraseAllContent(everywhere: Bool) {
         sessions.closeAll()
-        library.eraseAll()
-        credentials.eraseEverything()
+        if everywhere {
+            library.eraseAll()
+            credentials.eraseEverything()
+        } else {
+            sync.isEnabled = false
+            library.eraseThisDeviceOnly()
+        }
+        for host in knownHosts.all() {
+            try? knownHosts.remove(host: host.host, port: host.port)
+        }
         PreviewStore.shared.removeAll()
         settings.reset()
+        if !everywhere {
+            settings.syncsWithICloud = false
+        }
+    }
+}
+
+/// Stand-ins for what discovery finds.
+public struct SampleDiscovery: Sendable {
+    public var nearby: [NearbyComputer]
+    public var tailscale: [TailscaleDevice]
+
+    public init(nearby: [NearbyComputer] = [], tailscale: [TailscaleDevice] = []) {
+        self.nearby = nearby
+        self.tailscale = tailscale
     }
 }
 
@@ -89,11 +222,21 @@ public final class SessionManager {
     @ObservationIgnored private let library: LibraryStore
     @ObservationIgnored private let credentials: CredentialStore
     @ObservationIgnored private let settings: AppSettings
+    @ObservationIgnored private let sshKeys: SSHKeyStore
+    @ObservationIgnored private let knownHosts: KnownHostsStore
 
-    init(library: LibraryStore, credentials: CredentialStore, settings: AppSettings) {
+    init(
+        library: LibraryStore,
+        credentials: CredentialStore,
+        settings: AppSettings,
+        sshKeys: SSHKeyStore,
+        knownHosts: KnownHostsStore
+    ) {
         self.library = library
         self.credentials = credentials
         self.settings = settings
+        self.sshKeys = sshKeys
+        self.knownHosts = knownHosts
     }
 
     public func session(_ id: RemoteSession.ID?) -> RemoteSession? {
@@ -130,7 +273,9 @@ public final class SessionManager {
             persistsSettings: configure == nil,
             library: library,
             credentials: credentials,
-            settings: settings)
+            settings: settings,
+            sshKeys: sshKeys,
+            knownHosts: knownHosts)
         sessions.append(session)
         return session
     }
@@ -151,12 +296,19 @@ public final class SessionManager {
         if !target.kind.isApple {
             computer.settings = ConnectionSettings.defaults(for: target.kind)
         }
+        computer.origin = target.origin
+        computer.ssh.isEnabled = target.usesSSH
+        if target.observeOnly {
+            computer.settings.observeOnly = true
+        }
         let session = RemoteSession(
             computer: computer,
             isSaved: false,
             library: library,
             credentials: credentials,
-            settings: settings)
+            settings: settings,
+            sshKeys: sshKeys,
+            knownHosts: knownHosts)
         if let password = target.password, !password.isEmpty {
             try? credentials.setPassword(password, for: computer.id)
         }

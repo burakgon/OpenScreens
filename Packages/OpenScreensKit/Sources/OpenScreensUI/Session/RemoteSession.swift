@@ -19,6 +19,8 @@ public final class RemoteSession: Identifiable {
         case idle
         case connecting
         case awaitingCredentials(CredentialPrompt)
+        /// The SSH server presented a key the user has to vouch for.
+        case awaitingHostKey(HostKeyPrompt)
         case connected
         case reconnecting(attempt: Int)
         case failed(String)
@@ -26,10 +28,32 @@ public final class RemoteSession: Identifiable {
     }
 
     public struct CredentialPrompt: Equatable {
+        public enum Purpose: Equatable, Sendable {
+            /// Signing in to the computer's screen sharing.
+            case screenSharing
+            /// Signing in to the SSH server the connection is tunnelled through.
+            case secureTunnel
+        }
+
+        public var purpose: Purpose = .screenSharing
         /// Why the user is being asked, when a previous attempt was rejected.
         public var message: String?
         public var username: String
         public var asksForUsername: Bool
+    }
+
+    /// An SSH server's key, put to the user before the connection goes on.
+    public struct HostKeyPrompt: Equatable {
+        public var host: String
+        public var port: Int
+        /// The key's algorithm, such as `ssh-ed25519`.
+        public var keyType: String
+        public var fingerprint: String
+        /// The fingerprint on record, when the server presented a different
+        /// key from the one trusted before. `nil` for a server not seen yet.
+        public var expectedFingerprint: String?
+
+        public var keyHasChanged: Bool { expectedFingerprint != nil }
     }
 
     public let id = UUID()
@@ -77,16 +101,26 @@ public final class RemoteSession: Identifiable {
     @ObservationIgnored private let library: LibraryStore
     @ObservationIgnored private let credentials: CredentialStore
     @ObservationIgnored private let appSettings: AppSettings
+    @ObservationIgnored private let sshKeys: SSHKeyStore
+    @ObservationIgnored private let knownHosts: KnownHostsStore
 
     private var credentialPrompt: CredentialPrompt?
+    private var hostKeyPrompt: HostKeyPrompt?
     private var failureMessage: String?
+    /// Set while a magic packet is on its way and the computer is given time
+    /// to wake.
+    public private(set) var isWaking = false
     private var hasEnded = false
     private var isStarting = false
 
     @ObservationIgnored private var connectTask: Task<Void, Never>?
+    @ObservationIgnored private var connectAttempt = 0
     @ObservationIgnored private var observationTask: Task<Void, Never>?
     @ObservationIgnored private var statisticsTask: Task<Void, Never>?
     @ObservationIgnored private var pendingCredentials: (username: String?, password: String, remember: Bool)?
+    /// What the user typed when asked to sign in to the SSH server.
+    @ObservationIgnored private var enteredTunnelCredentials: (username: String, password: String, remember: Bool)?
+    @ObservationIgnored private var hostKeyAnswer: CheckedContinuation<Bool, Never>?
     @ObservationIgnored private var lastViewSize: CGSize = .zero
     @ObservationIgnored private var lastDisplayScale: CGFloat = 2
     @ObservationIgnored private var didRunConnectActions = false
@@ -108,7 +142,9 @@ public final class RemoteSession: Identifiable {
         persistsSettings: Bool = true,
         library: LibraryStore,
         credentials: CredentialStore,
-        settings: AppSettings
+        settings: AppSettings,
+        sshKeys: SSHKeyStore = SSHKeyStore(storage: InMemorySecretStorage()),
+        knownHosts: KnownHostsStore = KnownHostsStore(fileURL: nil)
     ) {
         self.computer = computer
         self.isSaved = isSaved
@@ -116,6 +152,8 @@ public final class RemoteSession: Identifiable {
         self.library = library
         self.credentials = credentials
         self.appSettings = settings
+        self.sshKeys = sshKeys
+        self.knownHosts = knownHosts
         self.requestedQuality = computer.settings.quality
         let engine = VNCSession(configuration: Self.configuration(for: computer))
         self.engine = engine
@@ -135,6 +173,7 @@ public final class RemoteSession: Identifiable {
     public var settings: ConnectionSettings { computer.settings }
 
     public var phase: Phase {
+        if let hostKeyPrompt { return .awaitingHostKey(hostKeyPrompt) }
         if let credentialPrompt { return .awaitingCredentials(credentialPrompt) }
         if hasEnded { return .ended }
         switch engine.connectionState {
@@ -151,6 +190,9 @@ public final class RemoteSession: Identifiable {
             if let failureMessage { return .failed(failureMessage) }
             return isStarting ? .connecting : .ended
         case .failed(let message):
+            // The engine still shows how the last attempt ended while the
+            // next one is getting under way.
+            if isStarting { return .connecting }
             return .failed(failureMessage ?? message)
         }
     }
@@ -176,7 +218,11 @@ public final class RemoteSession: Identifiable {
 
     /// Why the session is not running in the mode that was asked for.
     public var fallbackReason: String? {
-        engine.highPerformanceFallbackReason
+        if computer.ssh.isEnabled, requestedQuality == .highPerformance {
+            // Its picture travels over UDP, which a tunnel does not carry.
+            return "High Performance is not available through an SSH tunnel."
+        }
+        return engine.highPerformanceFallbackReason
     }
 
     /// Size of the remote screen being shown, in remote pixels.
@@ -227,8 +273,19 @@ public final class RemoteSession: Identifiable {
     /// Continues after the user has answered a credential prompt.
     public func submitCredentials(username: String, password: String, remember: Bool) {
         let trimmed = username.trimmingCharacters(in: .whitespaces)
+        guard let prompt = credentialPrompt else { return }
         credentialPrompt = nil
-        connect(username: trimmed.isEmpty ? nil : trimmed, password: password, remember: remember)
+        switch prompt.purpose {
+        case .screenSharing:
+            connect(username: trimmed.isEmpty ? nil : trimmed, password: password, remember: remember)
+        case .secureTunnel:
+            enteredTunnelCredentials = (trimmed.isEmpty ? prompt.username : trimmed, password, remember)
+            if let pending = pendingCredentials {
+                connect(username: pending.username, password: pending.password, remember: pending.remember)
+            } else {
+                start()
+            }
+        }
     }
 
     public func cancelCredentials() {
@@ -238,11 +295,30 @@ public final class RemoteSession: Identifiable {
 
     private func connect(username: String?, password: String, remember: Bool) {
         connectTask?.cancel()
-        isStarting = true
         failureMessage = nil
         didRunConnectActions = false
         pendingCredentials = (username, password, remember)
-        engine.configuration = Self.configuration(for: computer)
+
+        var configuration = Self.configuration(for: computer)
+        let tunnelFailure = TunnelFailure()
+        if computer.ssh.isEnabled {
+            switch tunnelIdentity(screenSharingUsername: username, screenSharingPassword: password) {
+            case .ready(let user, let credential):
+                configuration.transportProvider = tunnelProvider(
+                    username: user, credential: credential, failure: tunnelFailure)
+            case .needsSignIn(let user):
+                credentialPrompt = CredentialPrompt(
+                    purpose: .secureTunnel, message: nil,
+                    username: user, asksForUsername: computer.ssh.username.isEmpty)
+                return
+            case .missingKey:
+                failureMessage = "The SSH key chosen for this computer is not on this device. Choose another key, or a password, in the computer's settings."
+                return
+            }
+        }
+
+        isStarting = true
+        engine.configuration = configuration
         if lastViewSize.width > 0 {
             engine.updateRemoteDisplaySize(viewSize: lastViewSize, displayScale: lastDisplayScale)
         }
@@ -252,11 +328,17 @@ public final class RemoteSession: Identifiable {
             password: password,
             username: username)
 
+        connectAttempt += 1
+        let attempt = connectAttempt
         connectTask = Task { [weak self] in
             guard let self else { return }
             defer {
-                self.isStarting = false
-                self.connectTask = nil
+                // A prompt answered at once starts the next attempt before
+                // this one has finished unwinding; leave its state alone.
+                if self.connectAttempt == attempt {
+                    self.isStarting = false
+                    self.connectTask = nil
+                }
             }
             do {
                 if self.engine.connectionState == .disconnecting {
@@ -272,9 +354,174 @@ public final class RemoteSession: Identifiable {
                     username: username ?? "",
                     asksForUsername: self.computer.kind.isApple || username != nil)
             } catch {
-                self.pendingCredentials = nil
-                self.failureMessage = Self.describe(error)
+                if let tunnelError = tunnelFailure.take() {
+                    self.tunnelFailed(tunnelError)
+                } else {
+                    self.pendingCredentials = nil
+                    self.failureMessage = Self.describe(error)
+                }
             }
+        }
+    }
+
+    // MARK: - Secure tunnel
+
+    private enum TunnelIdentity {
+        case ready(username: String, credential: SSHCredential)
+        case needsSignIn(username: String)
+        case missingKey
+    }
+
+    /// Who to be on the SSH server.
+    ///
+    /// A tunnel to the computer itself is, on a Mac, a sign-in to the same
+    /// account as screen sharing, so unless the user set SSH up differently
+    /// the same name and password are tried before asking again.
+    private func tunnelIdentity(
+        screenSharingUsername: String?, screenSharingPassword: String
+    ) -> TunnelIdentity {
+        let ssh = computer.ssh
+        let configured = ssh.username.trimmingCharacters(in: .whitespaces)
+        let username = enteredTunnelCredentials?.username
+            ?? (configured.isEmpty ? screenSharingUsername ?? "" : configured)
+
+        switch ssh.authentication {
+        case .key:
+            guard let keyID = ssh.keyID, let key = sshKeys.privateKey(for: keyID) else {
+                return .missingKey
+            }
+            return username.isEmpty ? .needsSignIn(username: "") : .ready(username: username, credential: .key(key))
+        case .password:
+            let tunnelsToItself = ssh.host.trimmingCharacters(in: .whitespaces).isEmpty
+            let password = enteredTunnelCredentials?.password
+                ?? credentials.password(for: computer.id, kind: .ssh)
+                ?? (tunnelsToItself && !screenSharingPassword.isEmpty ? screenSharingPassword : nil)
+            guard let password, !username.isEmpty else {
+                return .needsSignIn(username: username)
+            }
+            return .ready(username: username, credential: .password(password))
+        }
+    }
+
+    private func tunnelProvider(
+        username: String, credential: SSHCredential, failure: TunnelFailure
+    ) -> VNCTransportProvider {
+        let factory = SSHTunnelFactory(
+            sshHost: computer.ssh.host.trimmingCharacters(in: .whitespaces),
+            sshPort: computer.ssh.port,
+            username: username,
+            credential: credential,
+            knownHosts: knownHosts,
+            hostKeyPolicy: { [weak self] challenge in
+                await self?.decide(challenge) ?? false
+            })
+        return { host, port in
+            do {
+                return try await factory.makeConnection(toHost: host, port: port)
+            } catch {
+                // The engine reports any transport failure the same way;
+                // keep the SSH error so the session can respond to it.
+                failure.record(error)
+                throw error
+            }
+        }
+    }
+
+    /// Asks the user about a host key that is not simply the one on record.
+    private func decide(_ challenge: SSHHostKeyChallenge) async -> Bool {
+        let expected: String?
+        switch challenge.verdict {
+        case .trusted:
+            return true
+        case .unknown:
+            expected = nil
+        case .mismatch(let onRecord, _):
+            expected = onRecord
+        }
+        guard !hasEnded else { return false }
+        let prompt = HostKeyPrompt(
+            host: challenge.host, port: challenge.port,
+            keyType: challenge.keyType, fingerprint: challenge.fingerprint,
+            expectedFingerprint: expected)
+        let accepted = await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                hostKeyAnswer?.resume(returning: false)
+                hostKeyAnswer = continuation
+                hostKeyPrompt = prompt
+            }
+        } onCancel: {
+            Task { @MainActor [weak self] in
+                self?.answerHostKey(trust: false)
+            }
+        }
+        guard accepted else { return false }
+        if expected != nil {
+            // The new key replaces the old one rather than joining it.
+            try? challenge.knownHosts.remove(host: challenge.host, port: challenge.port)
+        }
+        try? challenge.trust()
+        return true
+    }
+
+    /// Continues, or stops, after the user has looked at a host key.
+    public func answerHostKey(trust: Bool) {
+        hostKeyPrompt = nil
+        hostKeyAnswer?.resume(returning: trust)
+        hostKeyAnswer = nil
+    }
+
+    private func tunnelFailed(_ error: any Error) {
+        guard let error = error as? SSHError else {
+            pendingCredentials = nil
+            failureMessage = error.localizedDescription
+            return
+        }
+        switch error {
+        case .authenticationFailed where computer.ssh.authentication == .password:
+            let previous = enteredTunnelCredentials?.username
+                ?? computer.ssh.username.trimmingCharacters(in: .whitespaces)
+            enteredTunnelCredentials = nil
+            credentialPrompt = CredentialPrompt(
+                purpose: .secureTunnel,
+                message: "The SSH server did not accept that user name and password.",
+                username: previous.isEmpty ? pendingCredentials?.username ?? "" : previous,
+                asksForUsername: true)
+        case .hostKeyRejected:
+            pendingCredentials = nil
+            failureMessage = "The connection was stopped because the SSH server's key was not trusted."
+        default:
+            pendingCredentials = nil
+            failureMessage = error.localizedDescription
+        }
+    }
+
+    // MARK: - Waking
+
+    /// The address to wake the computer at, when one is saved and valid.
+    private var wakeAddress: MACAddress? {
+        computer.macAddress.flatMap { MACAddress($0) }
+    }
+
+    public var canWake: Bool { wakeAddress != nil }
+
+    /// Sends the computer a Wake-on-LAN packet, gives it a moment to come
+    /// up, and tries the connection again.
+    public func wakeAndRetry() {
+        guard let address = wakeAddress, !isWaking, !hasEnded else { return }
+        isWaking = true
+        Task { [weak self] in
+            do {
+                try await WakeOnLAN.wake(address)
+                // A sleeping Mac answers within a few seconds of the packet.
+                try await Task.sleep(for: .seconds(6))
+            } catch {
+                self?.failureMessage = "The wake signal could not be sent: \(error.localizedDescription)"
+                self?.isWaking = false
+                return
+            }
+            guard let self else { return }
+            self.isWaking = false
+            self.retry()
         }
     }
 
@@ -301,6 +548,7 @@ public final class RemoteSession: Identifiable {
             }
         }
         hasEnded = true
+        answerHostKey(trust: false)
         connectTask?.cancel()
         statisticsTask?.cancel()
         statisticsTask = nil
@@ -342,6 +590,13 @@ public final class RemoteSession: Identifiable {
             }
             if pending.remember {
                 try? credentials.setPassword(pending.password, for: computer.id)
+            }
+        }
+        if let entered = enteredTunnelCredentials, entered.remember, isSaved {
+            try? credentials.setPassword(entered.password, for: computer.id, kind: .ssh)
+            if computer.ssh.username != entered.username, entered.username != computer.username {
+                computer.ssh.username = entered.username
+                library.update(computer.id) { $0.ssh.username = entered.username }
             }
         }
         if isSaved {
@@ -389,7 +644,10 @@ public final class RemoteSession: Identifiable {
             || newSettings.syncVideoToAudio != old.syncVideoToAudio
             || newSettings.frameRate != old.frameRate
         if needsReconnect, isConnected {
-            engine.reconnect(with: Self.configuration(for: computer))
+            var configuration = Self.configuration(for: computer)
+            // The tunnel, if there is one, carries the new connection too.
+            configuration.transportProvider = engine.configuration.transportProvider
+            engine.reconnect(with: configuration)
             if lastViewSize.width > 0 {
                 engine.updateRemoteDisplaySize(viewSize: lastViewSize, displayScale: lastDisplayScale)
             }
@@ -732,7 +990,9 @@ public final class RemoteSession: Identifiable {
             queueDelayMilliseconds: raw.transport.queueDelayMilliseconds,
             bandwidthEstimateKbps: raw.transport.bandwidthEstimateKbps,
             uptime: raw.transport.connectionUptime,
-            encryption: Self.describe(engine.negotiatedContentEncryption))
+            encryption: computer.ssh.isEnabled
+                ? "SSH tunnel"
+                : Self.describe(engine.negotiatedContentEncryption))
     }
 
     // MARK: - Engine configuration
@@ -765,7 +1025,9 @@ public final class RemoteSession: Identifiable {
 
     private static func authenticationMessage(_ reason: String) -> String {
         let trimmed = reason.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty {
+        // The engine's own wording for a plain rejection carries a result
+        // code and nothing a person can act on.
+        if trimmed.isEmpty || trimmed.hasPrefix("Authentication failed") {
             return "The user name or password was not accepted."
         }
         return trimmed
@@ -796,7 +1058,8 @@ public final class RemoteSession: Identifiable {
         case .tlsX509: "TLS"
         case .appleComCryption(_, let keyLength, let mediaSRTP):
             "AES" + (keyLength.map { "-\($0)" } ?? "") + (mediaSRTP ? " + SRTP" : "")
-        case .some(.none): "None"
+        // Signing in and typing are protected even then; the picture is not.
+        case .some(.none): "Screen not encrypted"
         case nil: nil
         }
     }
@@ -843,5 +1106,24 @@ struct FractionAccumulator {
         remainderX -= x
         remainderY -= y
         return (Int32(clamping: Int(x)), Int32(clamping: Int(y)))
+    }
+}
+
+
+/// Carries the error behind a failed tunnel out of the engine's transport
+/// provider, which runs off the main actor.
+private nonisolated final class TunnelFailure: @unchecked Sendable {
+    private let lock = NSLock()
+    private var error: (any Error)?
+
+    func record(_ error: any Error) {
+        lock.withLock { self.error = error }
+    }
+
+    func take() -> (any Error)? {
+        lock.withLock {
+            defer { error = nil }
+            return error
+        }
     }
 }

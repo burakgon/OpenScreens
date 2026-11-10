@@ -10,8 +10,33 @@ import OpenScreensCore
 /// for its last-seen screen. Nothing here refers to a real machine.
 enum DebugSampleData {
     static func seedIfRequested(model: AppModel) {
-        guard ProcessInfo.processInfo.environment["OPENSCREENS_SAMPLE_DATA"] == "1",
-              model.library.computers.isEmpty else { return }
+        guard ProcessInfo.processInfo.environment["OPENSCREENS_SAMPLE_DATA"] == "1" else { return }
+        // Invented computers stand in for the network too: a screenshot
+        // should not show what is really around.
+        model.nearby.stop()
+        model.tailscale.stop()
+        model.sampleDiscovery = SampleDiscovery(
+            nearby: [
+                NearbyComputer(name: "Mac Studio", host: "mac-studio.local", kind: .mac, supportsSSH: true),
+                NearbyComputer(name: "Living Room iMac", host: "living-room-imac.local", kind: .mac, model: "iMac21,1"),
+                NearbyComputer(name: "Raspberry Pi", host: "raspberrypi.local", kind: .raspberryPi, supportsSSH: true),
+                NearbyComputer(name: "Office NAS", host: "office-nas.local", kind: .linux),
+            ],
+            tailscale: [
+                TailscaleDevice(
+                    id: "n1", name: "mini", dnsName: "mini.tailnet-example.ts.net",
+                    addresses: ["100.64.0.11"], os: "macOS", isOnline: true),
+                TailscaleDevice(
+                    id: "n2", name: "office-imac", dnsName: "office-imac.tailnet-example.ts.net",
+                    addresses: ["100.64.0.12"], os: "macOS", isOnline: true),
+                TailscaleDevice(
+                    id: "n3", name: "build-box", dnsName: "build-box.tailnet-example.ts.net",
+                    addresses: ["100.64.0.13"], os: "linux", isOnline: true),
+                TailscaleDevice(
+                    id: "n4", name: "old-laptop", dnsName: "old-laptop.tailnet-example.ts.net",
+                    addresses: ["100.64.0.14"], os: "windows", isOnline: false),
+            ])
+        guard model.library.computers.isEmpty else { return }
 
         let home = model.library.addGroup(named: "Home", symbolName: "house")
         let work = model.library.addGroup(named: "Studio", symbolName: "building.2")

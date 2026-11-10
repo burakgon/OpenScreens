@@ -13,6 +13,10 @@ import SwiftUI
 ///     OPENSCREENS_RESOLUTION=matchWindow|remote
 ///     OPENSCREENS_DISPLAYS=single|allCombined|twoVirtual
 ///     OPENSCREENS_KEYBOARD=automatic|keystrokes|unicode
+///     OPENSCREENS_OBSERVE=1                           watch without sending input
+///     OPENSCREENS_SECTION=favorites|recents|nearby|tailscale   open the library there
+///     OPENSCREENS_TRUST_HOST_KEY=1                    accept the SSH server's key when asked
+///     OPENSCREENS_SSH_PASSWORD=secret                 answer the SSH sign-in when asked
 ///     OPENSCREENS_KEYS="t=text|tap=cmd+c|…"           run a key script (see below)
 ///     OPENSCREENS_TYPE="text"                         type this once connected
 ///     OPENSCREENS_TYPE_AFTER=1                        seconds to wait before typing
@@ -24,6 +28,17 @@ import SwiftUI
 /// None of this exists in release builds.
 enum DebugAutomation {
     private static var didStart = false
+
+    /// The library section to open at launch, from `OPENSCREENS_SECTION`.
+    static var requestedSection: LibraryFilter? {
+        switch ProcessInfo.processInfo.environment["OPENSCREENS_SECTION"] {
+        case "favorites": .favorites
+        case "recents": .recents
+        case "nearby": .nearby
+        case "tailscale": .tailscale
+        default: nil
+        }
+    }
 
     static func runIfRequested(model: AppModel, present: @escaping (RemoteSession) -> Void) {
         let environment = ProcessInfo.processInfo.environment
@@ -52,6 +67,9 @@ enum DebugAutomation {
             if let keyboard = environment["OPENSCREENS_KEYBOARD"].flatMap(KeyboardInputMode.init(rawValue:)) {
                 settings.keyboardInput = keyboard
             }
+            if environment["OPENSCREENS_OBSERVE"] == "1" {
+                settings.observeOnly = true
+            }
         }
         present(session)
 
@@ -61,17 +79,32 @@ enum DebugAutomation {
         let exits = environment["OPENSCREENS_EXIT"] == "1"
 
         Task {
-            // Wait for the connection to settle one way or the other.
+            // Wait for the connection to settle one way or the other,
+            // answering what a person would be asked on the way.
             let deadline = Date.now.addingTimeInterval(40)
+            var prompts: [String] = []
             while Date.now < deadline {
                 switch session.phase {
                 case .connected, .failed, .ended: break
+                case .awaitingHostKey(let prompt):
+                    prompts.append("hostKey \(prompt.keyType) changed=\(prompt.keyHasChanged)")
+                    session.answerHostKey(trust: environment["OPENSCREENS_TRUST_HOST_KEY"] == "1")
+                    continue
+                case .awaitingCredentials(let prompt) where prompt.purpose == .secureTunnel:
+                    prompts.append("tunnelSignIn user=\(prompt.username) message=\(prompt.message ?? "-")")
+                    guard let password = environment["OPENSCREENS_SSH_PASSWORD"], prompts.count < 6 else { break }
+                    session.submitCredentials(username: prompt.username, password: password, remember: false)
+                    continue
+                case .awaitingCredentials(let prompt):
+                    // Nobody is here to sign in to screen sharing.
+                    prompts.append("signIn user=\(prompt.username) message=\(prompt.message ?? "-")")
                 default:
                     try? await Task.sleep(for: .milliseconds(200))
                     continue
                 }
                 break
             }
+            print("automation: prompts \(prompts)")
             if session.phase == .connected {
                 session.setStatisticsActive(true)
                 let wait = Double(environment["OPENSCREENS_TYPE_AFTER"] ?? "") ?? 1

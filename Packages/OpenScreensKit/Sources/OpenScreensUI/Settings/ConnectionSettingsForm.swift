@@ -213,7 +213,7 @@ struct SSHKeyPicker: View {
     @Binding var selection: UUID?
 
     var body: some View {
-        let keys = model.sshKeyList
+        let keys = model.sshKeys.keys()
         if keys.isEmpty {
             LabeledContent("Key") {
                 Text("No keys yet — add one in Settings › SSH Keys")

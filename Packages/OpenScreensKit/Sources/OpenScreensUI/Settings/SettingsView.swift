@@ -358,10 +358,17 @@ struct PrivacySettingsPane: View {
 
             Section {
                 Toggle("Sync Library with iCloud", isOn: $settings.syncsWithICloud)
+                if settings.syncsWithICloud {
+                    LabeledContent("Status") {
+                        Text(syncStatus)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.trailing)
+                    }
+                }
             } header: {
                 Text("iCloud")
             } footer: {
-                Text("Keeps your computers and groups the same on all your devices. Passwords sync separately through iCloud Keychain.")
+                Text("Keeps your computers and groups the same on all your devices. Passwords are never part of that: they stay in your keychain, and travel between devices only through iCloud Keychain if you use it.")
             }
 
             Section {
@@ -426,12 +433,26 @@ struct PrivacySettingsPane: View {
             isPresented: $showsEraseConfirmation,
             titleVisibility: .visible
         ) {
-            Button("Erase All Content and Settings", role: .destructive) {
-                model.eraseAllContent()
+            Button("Erase on All My Devices", role: .destructive) {
+                model.eraseAllContent(everywhere: true)
+            }
+            Button("Erase This Device Only", role: .destructive) {
+                model.eraseAllContent(everywhere: false)
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("This removes every saved computer, password, SSH key, preview and preference from this device. It cannot be undone.")
+            Text("Erasing on all your devices removes every saved computer through iCloud, along with every saved password and SSH key. Erasing this device only removes the library, trusted servers, previews and preferences here, turns iCloud sync off on this device, and leaves your keychain alone. Neither can be undone.")
+        }
+    }
+
+    private var syncStatus: String {
+        switch model.sync.status {
+        case .disabled: "Off"
+        case .unavailable: "iCloud is not available on this device"
+        case .syncing: "Syncing…"
+        case .idle(let lastSync):
+            lastSync.map { "Synced \($0.formatted(.relative(presentation: .named)))" } ?? "Up to date"
+        case .failed(let message): message
         }
     }
 

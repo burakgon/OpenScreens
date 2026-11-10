@@ -12,6 +12,8 @@ public struct ConnectionTarget: Hashable, Sendable {
     /// Route the connection through an SSH tunnel.
     public var usesSSH: Bool
     public var observeOnly: Bool
+    /// Where the address was found, kept if the connection is saved.
+    public var origin: ComputerOrigin
 
     public init(
         host: String,
@@ -21,7 +23,8 @@ public struct ConnectionTarget: Hashable, Sendable {
         name: String? = nil,
         kind: ComputerKind = .mac,
         usesSSH: Bool = false,
-        observeOnly: Bool = false
+        observeOnly: Bool = false,
+        origin: ComputerOrigin = .manual
     ) {
         self.host = host
         self.port = port
@@ -31,6 +34,7 @@ public struct ConnectionTarget: Hashable, Sendable {
         self.kind = kind
         self.usesSSH = usesSSH
         self.observeOnly = observeOnly
+        self.origin = origin
     }
 
     /// Schemes OpenScreens registers for.

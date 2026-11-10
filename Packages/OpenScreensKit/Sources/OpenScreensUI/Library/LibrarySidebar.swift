@@ -58,6 +58,23 @@ struct LibrarySidebar: View {
                     }
                 }
             }
+
+            if model.settings.showsNearbyComputers || model.showsTailscale {
+                Section("Discover") {
+                    if model.settings.showsNearbyComputers {
+                        row(.nearby, count: model.nearbyComputers.count)
+                    }
+                    if model.showsTailscale {
+                        row(.tailscale, count: model.tailnetComputers.filter(\.isOnline).count)
+                    }
+                }
+            }
+        }
+        .onChange(of: model.settings.showsNearbyComputers) { _, shows in
+            if !shows, filter == .nearby { filter = .all }
+        }
+        .onChange(of: model.showsTailscale) { _, shows in
+            if !shows, filter == .tailscale { filter = .all }
         }
         .navigationTitle("OpenScreens")
         .alert("New Group", isPresented: $showsNewGroup) {
@@ -127,6 +144,16 @@ struct ComputerMenu: View {
             Divider()
             Button("Observe Only", systemImage: "eye") {
                 actions.connect(computer) { $0.observeOnly = true }
+            }
+        }
+
+        if let address = computer.macAddress.flatMap({ MACAddress($0) }) {
+            Button("Wake", systemImage: "power") {
+                Task {
+                    // Best effort: a sleeping computer cannot say whether
+                    // the signal reached it.
+                    try? await WakeOnLAN.wake(address)
+                }
             }
         }
 

@@ -53,6 +53,9 @@ extension QualityMode {
 struct ComputerArtwork: View {
     let computer: Computer
     var showsPreview = true
+    /// A more specific symbol than the computer's kind gives, when the
+    /// hardware is known.
+    var symbolName: String?
 
     var body: some View {
         let preview = showsPreview ? PreviewStore.shared.image(for: computer.id) : nil
@@ -83,7 +86,7 @@ struct ComputerArtwork: View {
                 center: .topLeading,
                 startRadius: 0,
                 endRadius: 260)
-            Image(systemName: computer.kind.symbolName)
+            Image(systemName: symbolName ?? computer.kind.symbolName)
                 .font(.system(size: 44, weight: .light))
                 .foregroundStyle(.white.opacity(0.92))
                 .shadow(color: .black.opacity(0.18), radius: 8, y: 3)

@@ -78,6 +78,9 @@ public struct LibraryView: View {
         #if DEBUG
         .task {
             DebugSampleData.seedIfRequested(model: model)
+            if let section = DebugAutomation.requestedSection {
+                filter = section
+            }
             DebugAutomation.runIfRequested(model: model) { present($0) }
         }
         #endif
@@ -101,7 +104,11 @@ public struct LibraryView: View {
     @ViewBuilder
     private var content: some View {
         let computers = visibleComputers
-        if model.library.computers.isEmpty {
+        if activeFilter == .nearby {
+            NearbyContent(searchText: searchText)
+        } else if activeFilter == .tailscale {
+            TailscaleContent(searchText: searchText)
+        } else if model.library.computers.isEmpty {
             EmptyLibraryView(
                 onAdd: { addComputer() },
                 onQuickConnect: { showsQuickConnect = true })
@@ -278,6 +285,7 @@ public struct LibraryView: View {
     private var actions: LibraryActions {
         LibraryActions(
             connect: { computer, configure in connect(to: computer, configure: configure) },
+            open: { connect(to: $0) },
             edit: { editor = .edit($0) },
             delete: { requestDeletion($0) },
             add: { addComputer($0) })
@@ -304,6 +312,11 @@ public struct LibraryView: View {
             computer.groupID = id
         }
         editor = .new(computer)
+        if template == nil, activeFilter.isDiscovery {
+            // A computer added by hand goes to the library, not to a list
+            // of what was found.
+            filter = .all
+        }
     }
 
     private func requestDeletion(_ ids: Set<Computer.ID>) {
@@ -358,6 +371,8 @@ public struct LibraryView: View {
 /// environment so deeply nested views do not need a chain of closures.
 struct LibraryActions {
     var connect: (Computer, ((inout ConnectionSettings) -> Void)?) -> Void = { _, _ in }
+    /// Connects to an address that is not in the library.
+    var open: (ConnectionTarget) -> Void = { _ in }
     var edit: (Computer) -> Void = { _ in }
     var delete: (Set<Computer.ID>) -> Void = { _ in }
     var add: (Computer?) -> Void = { _ in }
