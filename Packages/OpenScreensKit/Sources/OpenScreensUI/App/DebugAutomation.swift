@@ -15,6 +15,7 @@ import SwiftUI
 ///     OPENSCREENS_DISPLAYS=single|allCombined|twoVirtual
 ///     OPENSCREENS_KEYBOARD=automatic|keystrokes|unicode
 ///     OPENSCREENS_OBSERVE=1                           watch without sending input
+///     OPENSCREENS_SHARED_CLIPBOARD=1                  share the clipboard (off unless asked for)
 ///     OPENSCREENS_LOCK_ON_DISCONNECT=1                lock the remote Mac on leaving
 ///     OPENSCREENS_TOUCH=trackpad|touch                how touches drive the pointer
 ///     OPENSCREENS_SECTION=favorites|recents|nearby|tailscale   open the library there
@@ -78,6 +79,9 @@ enum DebugAutomation {
             if let keyboard = environment["OPENSCREENS_KEYBOARD"].flatMap(KeyboardInputMode.init(rawValue:)) {
                 settings.keyboardInput = keyboard
             }
+            // A scripted session leaves this device's clipboard alone, and
+            // the other computer's, unless the clipboard is what is tested.
+            settings.sharedClipboard = environment["OPENSCREENS_SHARED_CLIPBOARD"] == "1"
             if environment["OPENSCREENS_OBSERVE"] == "1" {
                 settings.observeOnly = true
             }

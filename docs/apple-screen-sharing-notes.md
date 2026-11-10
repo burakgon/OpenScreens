@@ -129,6 +129,35 @@ when the viewer disconnects. Apple's viewer uses it to make both ends read
 key codes the same way. The server also reports its own input source to the
 viewer.
 
+## State changes, and the clipboard
+
+The server reports several things with one message:
+
+```
+14 00
+<size: u16>               size of what follows, 4
+00 01                     version
+<code: u16>
+```
+
+| Code | Sent when |
+|---|---|
+| 1 | The user at the Mac ended this viewer's connection. |
+| 2 | The Mac's pasteboard has new contents. |
+| 4 | Nothing else was sent for two seconds. |
+| 17 | The console went to another user session. |
+
+Others exist; the server passes on codes its agent hands it. Code 4 matters
+because of how often it comes. In High Performance mode the picture travels
+beside the connection, so the connection itself is quiet and this arrives
+every two seconds for as long as the session lasts.
+
+Only code 2 is about the pasteboard, and it carries none of it. A viewer
+that wants the new contents asks with `0b 00 00 00 <id: u32>` and is sent
+them, compressed, with its id echoed. A viewer that asks on every state
+change fetches the whole pasteboard every two seconds and, if it shares the
+clipboard, writes it over the local one each time.
+
 ## Virtual displays
 
 High Performance mode can replace the Mac's displays with virtual ones the
