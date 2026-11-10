@@ -77,6 +77,21 @@ VNC.
 - Live statistics: mode, size, frame rate, bitrate, loss, and how the
   connection is protected.
 
+## Screenshots
+
+<p align="center">
+  <img src="docs/images/mac-library.png" width="49%" alt="The library on the Mac, as a grid of screen previews">
+  <img src="docs/images/mac-nearby.png" width="49%" alt="Computers found on the local network">
+</p>
+<p align="center">
+  <img src="docs/images/ios-library.png" width="24%" alt="The library on iPhone">
+  <img src="docs/images/ios-nearby.png" width="24%" alt="Nearby computers on iPhone">
+  <img src="docs/images/ios-session.png" width="24%" alt="A session on iPhone, with the controls on glass">
+</p>
+
+<sub>The computers are invented and the desktops are drawn by the demo server
+that comes with the project, so nobody's real screen is on show.</sub>
+
 ## Install
 
 **Mac** — download the latest `OpenScreens.dmg` from
