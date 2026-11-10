@@ -25,12 +25,17 @@ jobs:
           swift test --package-path Vendor/rootshell-vnc
           --filter "RFBProtocolTests|RFBTransportTests"
 
+  # The Xcode 27 image is a preview with few runners behind it. Three jobs
+  # asking for one at once have left two waiting until GitHub gave up on
+  # them, so the jobs take turns.
   build:
     name: Build (${{ matrix.name }})
+    needs: test
     runs-on: xcode-27
     timeout-minutes: 45
     strategy:
       fail-fast: false
+      max-parallel: 1
       matrix:
         include:
           - name: Mac
