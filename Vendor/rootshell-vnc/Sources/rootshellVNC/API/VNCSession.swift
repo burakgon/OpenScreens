@@ -2344,11 +2344,18 @@ public final class VNCSession {
     /// The remote screen as currently presented, for screenshots and previews.
     ///
     /// Standard connections return the framebuffer cropped to the selected
-    /// display. High Performance connections return the primary display's
-    /// most recent video frame. Nil until a first picture has arrived.
+    /// display. High Performance connections return the most recent video
+    /// frame, with a second display placed beside the first as it is on
+    /// screen. Nil until a first picture has arrived.
     public func snapshotImage() -> CGImage? {
         if isHighPerformanceMode {
-            return videoBandRenderer.snapshotImage()
+            let primary = videoBandRenderer.snapshotImage()
+            guard activeVideoDisplayCount > 1,
+                  let primary,
+                  let secondary = secondaryVideoBandRenderer.snapshotImage() else {
+                return primary
+            }
+            return Self.composite(primary, secondary, regions: presentedVideoDisplayRegions) ?? primary
         }
         guard let image = currentImage else { return nil }
         guard let region = presentedFramebufferRegion else { return image }
@@ -2356,6 +2363,35 @@ public final class VNCSession {
         let crop = region.integral.intersection(bounds)
         guard !crop.isEmpty, crop != bounds else { return image }
         return image.cropping(to: crop) ?? image
+    }
+
+    /// Draws two displays into one image, each where its region says it is,
+    /// or side by side when the regions are not known.
+    private static func composite(_ first: CGImage, _ second: CGImage, regions: [CGRect]) -> CGImage? {
+        var frames = [
+            CGRect(x: 0, y: 0, width: first.width, height: first.height),
+            CGRect(x: first.width, y: 0, width: second.width, height: second.height),
+        ]
+        if regions.count >= 2, regions[0].width > 0, regions[1].width > 0 {
+            frames = [regions[0], regions[1]]
+        }
+        let bounds = frames[0].union(frames[1]).integral
+        guard bounds.width > 0, bounds.height > 0,
+              let context = CGContext(
+                data: nil, width: Int(bounds.width), height: Int(bounds.height),
+                bitsPerComponent: 8, bytesPerRow: 0,
+                space: first.colorSpace ?? CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.noneSkipFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue)
+        else { return nil }
+        for (image, frame) in zip([first, second], frames) {
+            // Regions have their origin at the top left; Core Graphics draws
+            // from the bottom left.
+            context.draw(image, in: CGRect(
+                x: frame.minX - bounds.minX,
+                y: bounds.maxY - frame.maxY,
+                width: frame.width, height: frame.height))
+        }
+        return context.makeImage()
     }
 
     /// Selected framebuffer rectangle in the server's normalized desktop
