@@ -8,11 +8,13 @@
 
 /* Begin PBXBuildFile section */
 		055BCA920FB31C33DCD7C48F /* OpenScreensApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E7349B5B05A9A64AABCEBCF /* OpenScreensApp.swift */; };
+		1135A02A79006ADA057D51C9 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = DFBFEF18A160FF6EB209740A /* PrivacyInfo.xcprivacy */; };
 		122D16FCC4730D4F758C39A2 /* ConnectIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEC6DFC7177B27E13751098A /* ConnectIntent.swift */; };
 		18451E96E6328CCD5664589F /* OpenScreensUI in Frameworks */ = {isa = PBXBuildFile; productRef = 1D356AC75D4B187F24937B11 /* OpenScreensUI */; };
 		33C31112E4BF4D10A0EB1D18 /* OpenScreensUI in Frameworks */ = {isa = PBXBuildFile; productRef = 6CBFB62E94001AE5A77A8AB6 /* OpenScreensUI */; };
 		36B09FB48D0A989126A51747 /* SessionUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B38BF83644E851B10DD4C16D /* SessionUITests.swift */; };
 		394B63C54EEE3765928C7674 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 9D1B1FE9A421BC617637517E /* Assets.xcassets */; };
+		8E8F7CE4701B4D06C02EABCE /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = DFBFEF18A160FF6EB209740A /* PrivacyInfo.xcprivacy */; };
 		928EDC606268DA95EB82703A /* OpenScreensApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5667D7A07CC8C4897DA52F09 /* OpenScreensApp.swift */; };
 		A203453761CD80B71EB414DA /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 9D1B1FE9A421BC617637517E /* Assets.xcassets */; };
 		B399BC05D35C0DE1EB1C8801 /* ConnectIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEC6DFC7177B27E13751098A /* ConnectIntent.swift */; };
@@ -44,6 +46,7 @@
 		A0937001AED5B5953955D719 /* OpenScreens iOS UITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = "OpenScreens iOS UITests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 		B38BF83644E851B10DD4C16D /* SessionUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionUITests.swift; sourceTree = "<group>"; };
 		C745C133F3E103C9B3E9DC77 /* OpenScreens iOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = "OpenScreens iOS.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		DFBFEF18A160FF6EB209740A /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		E2BF213BE8A90354C517D92D /* Base.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Base.xcconfig; sourceTree = "<group>"; };
 		EEC6DFC7177B27E13751098A /* ConnectIntent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectIntent.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -132,6 +135,7 @@
 			children = (
 				C488C9B681CEDB0859C420A3 /* Intents */,
 				9D1B1FE9A421BC617637517E /* Assets.xcassets */,
+				DFBFEF18A160FF6EB209740A /* PrivacyInfo.xcprivacy */,
 			);
 			path = Shared;
 			sourceTree = "<group>";
@@ -286,6 +290,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				A203453761CD80B71EB414DA /* Assets.xcassets in Resources */,
+				1135A02A79006ADA057D51C9 /* PrivacyInfo.xcprivacy in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -294,6 +299,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				394B63C54EEE3765928C7674 /* Assets.xcassets in Resources */,
+				8E8F7CE4701B4D06C02EABCE /* PrivacyInfo.xcprivacy in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
