@@ -66,6 +66,12 @@ public protocol TailscaleHTTPTransport: Sendable {
 }
 
 /// Sends requests with a `URLSession`.
+///
+/// Redirects are not followed. Tailscale's API answers where it is asked,
+/// and a request carries credentials: `URLSession` leaves the access token
+/// behind when it follows a redirect, but sends the body along on a 307 or
+/// 308 — and the body of a token request is the OAuth client's secret. A
+/// redirect comes back as the response it is, and is reported as an error.
 public struct URLSessionTailscaleTransport: TailscaleHTTPTransport {
     /// A session that keeps nothing on disk — no cache, no cookies — since
     /// the responses describe the user's devices.
@@ -84,11 +90,23 @@ public struct URLSessionTailscaleTransport: TailscaleHTTPTransport {
     }
 
     public func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
-        let (data, response) = try await session.data(for: request)
+        let (data, response) = try await session.data(for: request, delegate: RedirectRefusal())
         guard let response = response as? HTTPURLResponse else {
             throw URLError(.badServerResponse)
         }
         return (data, response)
+    }
+
+    /// Answers every offer to follow a redirect with "no".
+    private final class RedirectRefusal: NSObject, URLSessionTaskDelegate {
+        func urlSession(
+            _ session: URLSession,
+            task: URLSessionTask,
+            willPerformHTTPRedirection response: HTTPURLResponse,
+            newRequest request: URLRequest
+        ) async -> URLRequest? {
+            nil
+        }
     }
 }
 

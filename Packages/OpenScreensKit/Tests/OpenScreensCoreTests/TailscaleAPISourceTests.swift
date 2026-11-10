@@ -520,6 +520,151 @@ private func makeTailscaleSource(
     }
 }
 
+// MARK: - Over a real connection
+
+/// A web server on the loopback interface that answers every request with
+/// what it is told to and remembers what it was sent. One request per
+/// connection, which is all these tests need.
+private final class LoopbackWebServer: @unchecked Sendable {
+    let port: UInt16
+    private let listener: Int32
+    private let lock = NSLock()
+    private var received: [String] = []
+    private let respond: @Sendable (String) -> String
+
+    init(respond: @escaping @Sendable (String) -> String) throws {
+        self.respond = respond
+        let listener = socket(AF_INET, SOCK_STREAM, 0)
+        self.listener = listener
+        var address = sockaddr_in()
+        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_addr.s_addr = inet_addr("127.0.0.1")
+        var length = socklen_t(MemoryLayout<sockaddr_in>.size)
+        let listening = withUnsafeMutablePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { generic in
+                bind(listener, generic, length) == 0 && getsockname(listener, generic, &length) == 0
+            }
+        } && listen(listener, 8) == 0
+        port = UInt16(bigEndian: address.sin_port)
+        try #require(listening)
+        Thread { [self] in serve() }.start()
+    }
+
+    deinit {
+        close(listener)
+    }
+
+    /// Every request so far, head and body, as text.
+    var requests: [String] {
+        lock.withLock { received }
+    }
+
+    static func response(_ status: Int, headers: [String] = [], body: String = "") -> String {
+        (["HTTP/1.1 \(status) Status", "Content-Type: application/json",
+          "Content-Length: \(body.utf8.count)", "Connection: close"] + headers)
+            .joined(separator: "\r\n") + "\r\n\r\n" + body
+    }
+
+    private func serve() {
+        while true {
+            let client = accept(listener, nil, nil)
+            guard client >= 0 else { return }
+            var bytes: [UInt8] = []
+            var buffer = [UInt8](repeating: 0, count: 8192)
+            // The head, then as much of a body as the head announces.
+            while true {
+                let count = read(client, &buffer, buffer.count)
+                guard count > 0 else { break }
+                bytes.append(contentsOf: buffer[..<count])
+                let text = String(decoding: bytes, as: UTF8.self)
+                guard let end = text.range(of: "\r\n\r\n") else { continue }
+                let announced = text[..<end.lowerBound].lowercased()
+                    .split(separator: "\r\n")
+                    .first { $0.hasPrefix("content-length:") }
+                    .flatMap { Int($0.dropFirst("content-length:".count).trimmingCharacters(in: .whitespaces)) }
+                if text[end.upperBound...].utf8.count >= announced ?? 0 { break }
+            }
+            let request = String(decoding: bytes, as: UTF8.self)
+            lock.withLock { received.append(request) }
+            let response = Array(respond(request).utf8)
+            _ = response.withUnsafeBytes { write(client, $0.baseAddress, $0.count) }
+            close(client)
+        }
+    }
+}
+
+/// The source as the app makes it — a real `URLSession` — pointed at a
+/// server on this machine instead of Tailscale's.
+@Suite struct TailscaleTransportTests {
+
+    private func source(for server: LoopbackWebServer, credentials: TailscaleCredentials) -> TailscaleAPISource {
+        TailscaleAPISource(
+            tailnet: "-",
+            credentials: credentials,
+            transport: URLSessionTailscaleTransport(),
+            baseURL: URL(string: "http://127.0.0.1:\(server.port)/api/v2")!,
+            localAddresses: { [] },
+            now: { .now })
+    }
+
+    @Test func aListingArrivesOverARealConnection() async throws {
+        let api = try LoopbackWebServer { _ in
+            LoopbackWebServer.response(200, body: tailscaleDevicesResponse)
+        }
+        let devices = try await source(for: api, credentials: .accessToken("tskey-api-test")).devices()
+        #expect(devices.count == 4)
+        let request = try #require(api.requests.first)
+        #expect(request.hasPrefix("GET /api/v2/tailnet/-/devices?fields=all "))
+        #expect(request.contains("Authorization: Bearer tskey-api-test"))
+    }
+
+    /// Tailscale's API does not redirect. Something answering in its place
+    /// that does must not be followed anywhere, with or without credentials.
+    @Test(arguments: [301, 302, 303, 307, 308])
+    func aRedirectedListingIsNotFollowed(status: Int) async throws {
+        let elsewhere = try LoopbackWebServer { _ in
+            LoopbackWebServer.response(200, body: tailscaleDevicesResponse)
+        }
+        let api = try LoopbackWebServer { _ in
+            LoopbackWebServer.response(
+                status, headers: ["Location: http://localhost:\(elsewhere.port)/elsewhere"])
+        }
+
+        await #expect(throws: TailscaleError.server(status: status, message: nil)) {
+            try await source(for: api, credentials: .accessToken("tskey-api-test")).devices()
+        }
+        #expect(api.requests.count == 1)
+        #expect(elsewhere.requests.isEmpty)
+    }
+
+    /// A token request carries the OAuth client's secret in its body, and a
+    /// 307 or 308 asks for the same request, body and all, to be sent
+    /// somewhere else.
+    @Test(arguments: [301, 302, 303, 307, 308])
+    func theOAuthSecretIsNotSentOnToWhereARedirectPoints(status: Int) async throws {
+        let elsewhere = try LoopbackWebServer { _ in
+            LoopbackWebServer.response(200, body: #"{"access_token":"from-elsewhere","expires_in":3600}"#)
+        }
+        let api = try LoopbackWebServer { request in
+            request.hasPrefix("POST")
+                ? LoopbackWebServer.response(
+                    status, headers: ["Location: http://localhost:\(elsewhere.port)/elsewhere"])
+                : LoopbackWebServer.response(200, body: tailscaleDevicesResponse)
+        }
+        let client = TailscaleCredentials.oauthClient(id: "client-id", secret: "tskey-client-secret")
+
+        await #expect(throws: TailscaleError.server(status: status, message: nil)) {
+            try await source(for: api, credentials: client).devices()
+        }
+        // The secret went to the server it was meant for, once, and no
+        // further; and no token from anywhere else was put to use.
+        #expect(api.requests.count == 1)
+        #expect(api.requests.first?.contains("client_secret=tskey-client-secret") == true)
+        #expect(elsewhere.requests.isEmpty)
+    }
+}
+
 // MARK: - Credentials
 
 @Suite struct TailscaleCredentialsTests {
