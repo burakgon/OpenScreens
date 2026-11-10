@@ -85,6 +85,10 @@ public struct LibraryView: View {
             }
             DebugAutomation.runIfRequested(model: model) { present($0) }
             DebugAutomation.runFilesIfRequested(model: model) { browseFiles(on: $0) }
+            if ProcessInfo.processInfo.environment["OPENSCREENS_EDIT"] == "first",
+               let computer = model.library.computers.first {
+                editor = .edit(computer)
+            }
             #if os(macOS)
             if ProcessInfo.processInfo.environment["OPENSCREENS_SETTINGS"] != nil {
                 openSettings()

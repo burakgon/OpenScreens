@@ -16,7 +16,7 @@ trap 'rm -rf "$WORK"' EXIT
 TEAM=$(sed -n 's/^DEVELOPMENT_TEAM *= *//p' Config/Signing.xcconfig | head -1)
 [ -n "$TEAM" ] || { echo "Set DEVELOPMENT_TEAM in Config/Signing.xcconfig first." >&2; exit 1; }
 
-echo "Archiving…"
+echo "Archiving..."
 xcodebuild archive \
     -project OpenScreens.xcodeproj -scheme "OpenScreens iOS" -configuration Release \
     -destination "generic/platform=iOS" \
@@ -38,7 +38,7 @@ cat > "$WORK/upload.plist" <<PLIST
 </plist>
 PLIST
 
-echo "Uploading to App Store Connect…"
+echo "Uploading to App Store Connect..."
 xcodebuild -exportArchive \
     -archivePath "$WORK/OpenScreens.xcarchive" \
     -exportOptionsPlist "$WORK/upload.plist" -exportPath "$WORK/upload" \

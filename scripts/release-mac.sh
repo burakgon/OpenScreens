@@ -18,7 +18,7 @@ TEAM=$(sed -n 's/^DEVELOPMENT_TEAM *= *//p' Config/Signing.xcconfig | head -1)
 [ -n "$TEAM" ] || { echo "Set DEVELOPMENT_TEAM in Config/Signing.xcconfig first." >&2; exit 1; }
 VERSION=$(sed -n 's/^MARKETING_VERSION *= *//p' Config/Base.xcconfig)
 
-echo "Archiving OpenScreens $VERSION…"
+echo "Archiving OpenScreens ${VERSION}..."
 xcodebuild archive \
     -project OpenScreens.xcodeproj -scheme OpenScreens -configuration Release \
     -destination "generic/platform=macOS" \
@@ -38,13 +38,13 @@ cat > "$WORK/upload.plist" <<PLIST
 </plist>
 PLIST
 
-echo "Sending to Apple's notary service…"
+echo "Sending to Apple's notary service..."
 xcodebuild -exportArchive \
     -archivePath "$WORK/OpenScreens.xcarchive" \
     -exportOptionsPlist "$WORK/upload.plist" -exportPath "$WORK/upload" \
     -allowProvisioningUpdates
 
-echo "Waiting for the notarised app…"
+echo "Waiting for the notarised app..."
 tries=0
 until xcodebuild -exportNotarizedApp \
         -archivePath "$WORK/OpenScreens.xcarchive" -exportPath "$WORK/notarized" \
@@ -62,7 +62,7 @@ APP="$WORK/notarized/OpenScreens.app"
 xcrun stapler validate "$APP"
 spctl --assess --type execute --verbose=2 "$APP"
 
-echo "Building the disk image…"
+echo "Building the disk image..."
 mkdir -p "$OUT" "$WORK/dmg"
 cp -R "$APP" "$WORK/dmg/"
 ln -s /Applications "$WORK/dmg/Applications"
