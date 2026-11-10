@@ -366,8 +366,9 @@ actor NearbyEngine {
             Self.log.debug("A Bonjour lookup failed with DNS-SD error \(code, privacy: .public)")
             return
         }
-        // Not from inside the callback that brought the news: closing the
-        // shared connection there would pull it out from under the library.
+        // The connection has let go of the daemon by itself. Winding down
+        // the rest is left for the next turn, clear of whichever handler
+        // brought the news.
         queue.async { [weak self] in
             self?.assumeIsolated { $0.fail(.failed(Status.message(forDNSServiceError: code))) }
         }
@@ -421,8 +422,7 @@ extension NearbyEngine.Status {
     /// Whether a DNS-SD error means the connection to the daemon is gone, as
     /// opposed to one lookup having failed.
     static func isConnectionLoss(_ code: DNSServiceErrorType) -> Bool {
-        code == DNSServiceErrorType(kDNSServiceErr_ServiceNotRunning)
-            || code == DNSServiceErrorType(kDNSServiceErr_DefunctConnection)
+        DNSServiceConnection.isConnectionLoss(code)
     }
 
     static func message(forDNSServiceError code: DNSServiceErrorType) -> String {
