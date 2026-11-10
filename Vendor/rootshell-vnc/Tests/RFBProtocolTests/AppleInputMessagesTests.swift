@@ -96,3 +96,53 @@ final class AppleKeyboardInputSourceTests: XCTestCase {
             identifier: String(repeating: "a", count: 255)))
     }
 }
+
+final class AppleStateChangeTests: XCTestCase {
+    private func message(_ code: UInt16) -> Data {
+        Data([0x14, 0, 0, 4, 0, 1, UInt8(code >> 8), UInt8(code & 0xff)])
+    }
+
+    func testReadsTheCode() throws {
+        XCTAssertEqual(try XCTUnwrap(AppleStateChange(wire: message(2))).code, 2)
+        XCTAssertEqual(try XCTUnwrap(AppleStateChange(wire: message(4))).code, 4)
+        XCTAssertEqual(try XCTUnwrap(AppleStateChange(wire: message(0x1234))).code, 0x1234)
+    }
+
+    func testOnlyAChangedPasteboardAnnouncesThePasteboard() throws {
+        XCTAssertTrue(try XCTUnwrap(AppleStateChange(wire: message(AppleStateChange.pasteboardChanged))).announcesPasteboard)
+        for code in [AppleStateChange.idle, AppleStateChange.localUserClosedConnection,
+                     AppleStateChange.userSessionChanged, 0, 0x0c, 6] {
+            XCTAssertFalse(try XCTUnwrap(AppleStateChange(wire: message(code))).announcesPasteboard, "\(code)")
+        }
+    }
+
+    func testRefusesWhatIsNotAStateChange() {
+        var other = message(2)
+        other[0] = 0x15
+        XCTAssertNil(AppleStateChange(wire: other))
+        XCTAssertNil(AppleStateChange(wire: message(2).prefix(7)))
+        XCTAssertNil(AppleStateChange(wire: Data()))
+        // A size too small to hold a code.
+        XCTAssertNil(AppleStateChange(wire: Data([0x14, 0, 0, 2, 0, 1, 0, 2])))
+    }
+
+    func testReadsTheCodeFromALongerMessage() throws {
+        let longer = Data([0x14, 0, 0, 6, 0, 1, 0, 2, 0xaa, 0xbb])
+        XCTAssertEqual(AppleStateChange.payloadSize(header: longer), 6)
+        XCTAssertEqual(try XCTUnwrap(AppleStateChange(wire: longer)).code, 2)
+    }
+
+    func testPayloadSizeNeedsAWholeHeader() {
+        XCTAssertEqual(AppleStateChange.payloadSize(header: Data([0x14, 0, 0, 4])), 4)
+        XCTAssertEqual(AppleStateChange.payloadSize(header: Data([0x14, 0, 0])), 0)
+        XCTAssertEqual(AppleStateChange.payloadSize(header: Data([0x14, 0, 0x01, 0x02, 9, 9])), 0x0102)
+    }
+
+    /// A slice does not start at index zero; the reader must not assume it.
+    func testReadsFromASliceOfALargerBuffer() throws {
+        let buffer = Data([0xff, 0xff, 0xff]) + message(2)
+        let slice = buffer[3...]
+        XCTAssertEqual(try XCTUnwrap(AppleStateChange(wire: slice)).code, 2)
+        XCTAssertEqual(AppleStateChange.payloadSize(header: slice), 4)
+    }
+}

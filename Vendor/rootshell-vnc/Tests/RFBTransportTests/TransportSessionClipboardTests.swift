@@ -175,7 +175,99 @@ final class TransportSessionClipboardTests: XCTestCase {
         await session.disconnect()
     }
 
+    /// An Apple server reports several things with message 20, among them,
+    /// every two seconds, that nothing happened. Only the report of a
+    /// changed pasteboard may fetch the pasteboard: fetching on the others
+    /// copied the remote clipboard over the local one again and again.
+    func testAppleStateChangeFetchesThePasteboardOnlyWhenItChanged() async throws {
+        let (session, connection) = try await connectAppleServer()
+        try await session.setSharedClipboardEnabled(true)
+        // Requests are numbered from one.
+        let requestCount: @Sendable () async -> Int = {
+            let sent = await connection.sentBytes()
+            return (1...4).reduce(0) { count, id in
+                count + Self.occurrenceCount(
+                    of: AppleClipboardProtocol.requestMessage(requestID: UInt32(id)), in: sent)
+            }
+        }
+
+        // Idle, a session change, and a code nobody has named.
+        for code: UInt16 in [AppleStateChange.idle, AppleStateChange.userSessionChanged, 0x0c] {
+            await connection.enqueueServerBytes(Self.stateChange(code))
+        }
+        let fetchedEarly = await Self.waitUntil(timeout: .milliseconds(250)) {
+            await requestCount() > 0
+        }
+        XCTAssertFalse(fetchedEarly)
+
+        await connection.enqueueServerBytes(Self.stateChange(AppleStateChange.pasteboardChanged))
+        let fetched = await Self.waitUntil { await requestCount() == 1 }
+        XCTAssertTrue(fetched)
+
+        // The messages before it were consumed whole: the stream is still
+        // framed, and a second change is a second fetch.
+        await connection.enqueueServerBytes(Self.stateChange(AppleStateChange.idle))
+        await connection.enqueueServerBytes(Self.stateChange(AppleStateChange.pasteboardChanged))
+        let fetchedAgain = await Self.waitUntil { await requestCount() == 2 }
+        XCTAssertTrue(fetchedAgain)
+        await session.disconnect()
+    }
+
+    func testAppleStateChangeIsIgnoredWhileTheClipboardIsNotShared() async throws {
+        let (session, connection) = try await connectAppleServer()
+        let request = AppleClipboardProtocol.requestMessage(requestID: 1)
+
+        await connection.enqueueServerBytes(Self.stateChange(AppleStateChange.pasteboardChanged))
+        let fetched = await Self.waitUntil(timeout: .milliseconds(250)) {
+            Self.occurrenceCount(of: request, in: await connection.sentBytes()) > 0
+        }
+        XCTAssertFalse(fetched)
+        await session.disconnect()
+    }
+
+    /// The size field says how long the message is. One longer than today's
+    /// must be skipped whole, not leave its tail to be read as a message.
+    func testALongerAppleStateChangeKeepsTheStreamFramed() async throws {
+        let (session, connection) = try await connectAppleServer()
+        try await session.setSharedClipboardEnabled(true)
+        let request = AppleClipboardProtocol.requestMessage(requestID: 1)
+
+        // Six bytes of payload: version, code, and two bytes this version
+        // does not know. Read as eight bytes, the tail would start a bell and
+        // then an unknown message, which ends the session.
+        await connection.enqueueServerBytes(Data([
+            AppleStateChange.messageType, 0, 0, 6,
+            0, 1, 0, 4,
+            0x02, 0x77,
+        ]))
+        await connection.enqueueServerBytes(Self.stateChange(AppleStateChange.pasteboardChanged))
+        let fetched = await Self.waitUntil {
+            Self.occurrenceCount(of: request, in: await connection.sentBytes()) == 1
+        }
+        XCTAssertTrue(fetched)
+        await session.disconnect()
+    }
+
     // MARK: - Helpers
+
+    private func connectAppleServer() async throws -> (TransportSession, ScriptedRFBConnection) {
+        let connection = ScriptedRFBConnection()
+        var script = ProtocolVersion.apple.wireBytes()
+        script.append(contentsOf: [1, SecurityType.none.rawValue])
+        script.append(contentsOf: [0, 0, 0, 0])
+        script.append(Self.appleServerInitMessage(
+            serverCommands: [AppleClipboardProtocol.packedScrapMessageType]))
+        await connection.enqueueServerBytes(script)
+        let session = TransportSession(
+            host: "apple.test", port: 5900, password: "",
+            preferredEncodings: [.raw], connection: connection)
+        try await session.connect()
+        return (session, connection)
+    }
+
+    private static func stateChange(_ code: UInt16) -> Data {
+        Data([AppleStateChange.messageType, 0, 0, 4, 0, 1, UInt8(code >> 8), UInt8(code & 0xff)])
+    }
 
     private func connectConventionalServer() async throws
         -> (TransportSession, ScriptedRFBConnection, EventRecorder) {

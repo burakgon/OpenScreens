@@ -2238,8 +2238,8 @@ public actor TransportSession {
                     try await handleServerCutText()
                 case AppleClipboardProtocol.packedScrapMessageType:
                     try await handleApplePackedClipboard()
-                case 0x14:
-                    try await handleAppleAutoPasteboardInfo()
+                case AppleStateChange.messageType:
+                    try await handleAppleStateChange()
                 default:
                     log.warning("Unknown server message type: \(messageType)")
                     throw VNCProtocolError.protocolViolation(
@@ -2996,11 +2996,31 @@ public actor TransportSession {
             uncompressedLength: uncompressedLength)
     }
 
-    private func handleAppleAutoPasteboardInfo() async throws {
-        // Apple sends this fixed eight-byte notification after command 21 has
-        // enabled automatic pasteboard updates. It announces a change; the
-        // viewer must still issue command 11 to fetch the packed scrap.
-        _ = try await readControlChannel(exactly: 7)
+    private func handleAppleStateChange() async throws {
+        // The type byte is already read. Follow the size the message gives
+        // rather than assume one, so a longer message cannot unframe the
+        // stream.
+        var message = Data([AppleStateChange.messageType])
+        message.append(try await readControlChannel(
+            exactly: AppleStateChange.headerWireSize - 1))
+        let payloadSize = AppleStateChange.payloadSize(header: message)
+        if payloadSize > 0 {
+            message.append(try await readControlChannel(exactly: payloadSize))
+        }
+        await noteAppleStateChange(AppleStateChange(wire: message))
+    }
+
+    /// Acts on a state change. The server sends this message for several
+    /// things, among them a notice every two seconds that nothing happened;
+    /// only a changed pasteboard is a reason to fetch the pasteboard.
+    private func noteAppleStateChange(_ change: AppleStateChange?) async {
+        guard let change else { return }
+        guard change.announcesPasteboard else {
+            if change.code != AppleStateChange.idle {
+                log.debug("Apple state change \(change.code)")
+            }
+            return
+        }
         guard sharedClipboardEnabled else { return }
         do {
             try await requestRemoteClipboard()
@@ -4276,20 +4296,20 @@ public actor TransportSession {
                 guard try drainAppleDecryptedServerCutText() else { return }
             case AppleClipboardProtocol.packedScrapMessageType:
                 guard try drainAppleDecryptedPackedClipboard() else { return }
-            case 0x14:
-                guard base + 8 <= appleDecryptedRFBBuffer.endIndex else {
+            case AppleStateChange.messageType:
+                let headerEnd = base + AppleStateChange.headerWireSize
+                guard headerEnd <= appleDecryptedRFBBuffer.endIndex else {
                     return
                 }
-                appleDecryptedRFBBuffer.removeSubrange(base..<base + 8)
-                if sharedClipboardEnabled {
-                    do {
-                        try await requestRemoteClipboard()
-                    } catch {
-                        log.warning(
-                            "Unable to request changed Apple clipboard: "
-                                + error.localizedDescription)
-                    }
+                let end = headerEnd + AppleStateChange.payloadSize(
+                    header: Data(appleDecryptedRFBBuffer[base..<headerEnd]))
+                guard end <= appleDecryptedRFBBuffer.endIndex else {
+                    return
                 }
+                let change = AppleStateChange(
+                    wire: Data(appleDecryptedRFBBuffer[base..<end]))
+                appleDecryptedRFBBuffer.removeSubrange(base..<end)
+                await noteAppleStateChange(change)
             default:
                 return
             }
