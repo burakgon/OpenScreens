@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Tests
+    runs-on: xcode-27
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_27.2.app
+      - name: Package tests
+        run: swift test --package-path Packages/OpenScreensKit
+      - name: Engine tests
+        run: >
+          swift test --package-path Vendor/rootshell-vnc
+          --filter "RFBProtocolTests|RFBTransportTests"
+
+  build:
+    name: Build (${{ matrix.name }})
+    runs-on: xcode-27
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Mac
+            scheme: OpenScreens
+            destination: platform=macOS
+          - name: iPhone and iPad
+            scheme: OpenScreens iOS
+            destination: generic/platform=iOS Simulator
+    steps:
+      - uses: actions/checkout@v5
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_27.2.app
+      - name: Build
+        run: >
+          xcodebuild build
+          -project OpenScreens.xcodeproj
+          -scheme "${{ matrix.scheme }}"
+          -destination "${{ matrix.destination }}"
+          CODE_SIGNING_ALLOWED=NO

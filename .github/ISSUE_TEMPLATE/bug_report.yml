@@ -1,0 +1,38 @@
+name: Something is not working
+description: A crash, a wrong result, or anything that behaves differently from what the app says it does.
+labels: [bug]
+body:
+  - type: textarea
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: dropdown
+    attributes:
+      label: App
+      options: [Mac, iPhone, iPad]
+      multiple: true
+    validations:
+      required: true
+  - type: input
+    attributes:
+      label: OpenScreens version
+      description: Settings › About.
+    validations:
+      required: true
+  - type: input
+    attributes:
+      label: Your system version
+      placeholder: macOS 26.1, iOS 26.2 …
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: The computer you were connecting to
+      description: Kind and system version, the mode (High Performance, Standard, Full Quality), and whether through Tailscale or an SSH tunnel. For picture or connection problems, add what the statistics overlay shows.
+    validations:
+      required: true
+  - type: markdown
+    attributes:
+      value: Please leave out anything private — remote screens, passwords, tokens and keys.

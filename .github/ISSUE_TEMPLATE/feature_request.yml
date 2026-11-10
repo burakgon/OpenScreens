@@ -1,0 +1,15 @@
+name: An idea
+description: Something OpenScreens could do, or do better.
+labels: [enhancement]
+body:
+  - type: textarea
+    attributes:
+      label: What you are trying to do
+      description: The situation you are in, rather than the feature you have in mind. It often points at a better answer.
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: What would help
+    validations:
+      required: true
