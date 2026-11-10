@@ -21,6 +21,7 @@ public struct OpenScreensScenes: Scene {
     public var body: some Scene {
         Window("OpenScreens", id: WindowID.library) {
             LibraryView()
+                .appLock()
                 .environment(model)
                 .frame(minWidth: 720, minHeight: 440)
                 .onReceive(NotificationCenter.default.publisher(
@@ -48,6 +49,7 @@ public struct OpenScreensScenes: Scene {
 
         WindowGroup(id: WindowID.session, for: RemoteSession.ID.self) { $sessionID in
             SessionWindow(sessionID: sessionID)
+                .appLock()
                 .environment(model)
         }
         .defaultSize(width: 1280, height: 800)
@@ -58,6 +60,8 @@ public struct OpenScreensScenes: Scene {
 
         Settings {
             SettingsView()
+                // The switch for the lock is in here too.
+                .appLock()
                 .environment(model)
         }
 
@@ -80,10 +84,15 @@ private struct MenuBarContent: View {
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
-        let favorites = model.library.favorites
-        let recents = model.library.recents.filter { !$0.isFavorite }.prefix(6)
+        // A locked app does not list its computers here either.
+        let favorites: [Computer] = model.isLocked ? [] : model.library.favorites
+        let recents: [Computer] = model.isLocked
+            ? []
+            : Array(model.library.recents.filter { !$0.isFavorite }.prefix(6))
 
-        if favorites.isEmpty, recents.isEmpty {
+        if model.isLocked {
+            Text("OpenScreens Is Locked")
+        } else if favorites.isEmpty, recents.isEmpty {
             Text("No Favorites or Recent Computers")
         }
         if !favorites.isEmpty {
@@ -95,7 +104,7 @@ private struct MenuBarContent: View {
         }
         if !recents.isEmpty {
             Section("Recents") {
-                ForEach(Array(recents)) { computer in
+                ForEach(recents) { computer in
                     button(for: computer)
                 }
             }

@@ -20,6 +20,8 @@ public final class AppModel {
     public let sync: CloudSyncEngine
     public let sshKeys: SSHKeyStore
     public let knownHosts: KnownHostsStore
+    /// The optional lock in front of everything, shared by every window.
+    public let lock: AppLock
 
     /// Fixed lists shown instead of what is really out there, so previews
     /// and screenshots do not show anyone's actual network.
@@ -57,6 +59,7 @@ public final class AppModel {
         self.credentials = credentials
         self.sshKeys = sshKeys
         self.knownHosts = knownHosts
+        self.lock = AppLock(startsUnlocked: !settings.requiresAuthentication)
         self.sessions = SessionManager(
             library: library, credentials: credentials, settings: settings,
             sshKeys: sshKeys, knownHosts: knownHosts)

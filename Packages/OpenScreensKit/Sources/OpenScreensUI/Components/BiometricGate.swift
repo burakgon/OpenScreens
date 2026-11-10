@@ -44,34 +44,66 @@ enum BiometricGate {
     }
 }
 
+/// Whether the app's content is behind its lock. One instance is shared by
+/// every window, so unlocking one unlocks them all.
+@Observable
+public final class AppLock {
+    public private(set) var isUnlocked: Bool
+    public private(set) var isAuthenticating = false
+
+    /// - Parameter startsUnlocked: Pass `true` when the lock is not in use
+    ///   at launch, so that turning it on later does not lock the app under
+    ///   the person who just turned it on.
+    public init(startsUnlocked: Bool) {
+        isUnlocked = startsUnlocked
+    }
+
+    public func lock() {
+        isUnlocked = false
+    }
+
+    /// Asks the device owner to authenticate, unless that is already under
+    /// way or done.
+    public func unlock() async {
+        guard !isUnlocked, !isAuthenticating else { return }
+        isAuthenticating = true
+        defer { isAuthenticating = false }
+        if await BiometricGate.authenticate(reason: "Unlock your computers") {
+            isUnlocked = true
+        }
+    }
+}
+
+extension AppModel {
+    /// Whether the user has to authenticate before seeing anything.
+    public var isLocked: Bool {
+        settings.requiresAuthentication && !lock.isUnlocked
+    }
+}
+
 /// Covers its content until the device owner has authenticated.
 struct AppLockModifier: ViewModifier {
     @Environment(AppModel.self) private var model
     @Environment(\.scenePhase) private var scenePhase
-    @State private var isUnlocked = false
-    @State private var isAuthenticating = false
-
-    private var isLocked: Bool {
-        model.settings.requiresAuthentication && !isUnlocked
-    }
 
     func body(content: Content) -> some View {
         content
             .overlay {
-                if isLocked {
+                if model.isLocked {
                     lockScreen
                         .transition(.opacity)
                 }
             }
-            .animation(.smooth(duration: 0.25), value: isLocked)
+            .animation(.smooth(duration: 0.25), value: model.isLocked)
             .task { await unlockIfNeeded() }
+            #if os(iOS)
             .onChange(of: scenePhase) { _, phase in
                 switch phase {
                 case .background:
                     // Lock again once the app has really gone away, not for
                     // every momentary loss of focus.
                     if model.settings.requiresAuthentication, model.sessions.sessions.isEmpty {
-                        isUnlocked = false
+                        model.lock.lock()
                     }
                 case .active:
                     Task { await unlockIfNeeded() }
@@ -79,6 +111,7 @@ struct AppLockModifier: ViewModifier {
                     break
                 }
             }
+            #endif
     }
 
     private var lockScreen: some View {
@@ -97,19 +130,15 @@ struct AppLockModifier: ViewModifier {
                 }
                 .buttonStyle(.glassProminent)
                 .controlSize(.large)
-                .disabled(isAuthenticating)
+                .disabled(model.lock.isAuthenticating)
             }
             .padding(32)
         }
     }
 
     private func unlockIfNeeded() async {
-        guard isLocked, !isAuthenticating else { return }
-        isAuthenticating = true
-        defer { isAuthenticating = false }
-        if await BiometricGate.authenticate(reason: "Unlock your computers") {
-            isUnlocked = true
-        }
+        guard model.isLocked else { return }
+        await model.lock.unlock()
     }
 }
 
