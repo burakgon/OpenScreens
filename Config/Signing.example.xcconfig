@@ -1,0 +1,8 @@
+// Copy this file to Config/Signing.xcconfig (which git ignores) and set your
+// own Apple Developer team. Nothing else is needed for local development.
+
+DEVELOPMENT_TEAM = ABCDE12345
+
+// Building under your own team? Use a bundle identifier you own, otherwise
+// automatic signing cannot register the App ID.
+// OPENSCREENS_BUNDLE_ID = com.example.openscreens

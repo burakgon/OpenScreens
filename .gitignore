@@ -32,3 +32,6 @@ dist/
 .env
 .env.*
 AuthKey_*.p8
+
+# Local signing identity
+Config/Signing.xcconfig

@@ -1,0 +1,47 @@
+name: OpenScreens
+
+options:
+  createIntermediateGroups: true
+  generateEmptyDirectories: true
+  groupSortPosition: top
+  defaultConfig: Release
+  developmentLanguage: en
+
+configFiles:
+  Debug: Config/Base.xcconfig
+  Release: Config/Base.xcconfig
+
+packages:
+  OpenScreensKit:
+    path: Packages/OpenScreensKit
+
+targets:
+  OpenScreens:
+    type: application
+    platform: macOS
+    sources:
+      - path: Apps/macOS
+      - path: Apps/Shared
+    settings:
+      base:
+        PRODUCT_NAME: OpenScreens
+        PRODUCT_BUNDLE_IDENTIFIER: $(OPENSCREENS_BUNDLE_ID)
+        INFOPLIST_FILE: Apps/macOS/Info.plist
+        CODE_SIGN_ENTITLEMENTS: Apps/macOS/OpenScreens.entitlements
+        ENABLE_HARDENED_RUNTIME: YES
+        COMBINE_HIDPI_IMAGES: YES
+    dependencies:
+      - package: OpenScreensKit
+        product: OpenScreensUI
+      - package: OpenScreensKit
+        product: OpenScreensCore
+
+schemes:
+  OpenScreens:
+    build:
+      targets:
+        OpenScreens: all
+    run:
+      config: Debug
+    archive:
+      config: Release

@@ -1,0 +1,376 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		33C31112E4BF4D10A0EB1D18 /* OpenScreensUI in Frameworks */ = {isa = PBXBuildFile; productRef = 6CBFB62E94001AE5A77A8AB6 /* OpenScreensUI */; };
+		928EDC606268DA95EB82703A /* OpenScreensApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5667D7A07CC8C4897DA52F09 /* OpenScreensApp.swift */; };
+		A203453761CD80B71EB414DA /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 9D1B1FE9A421BC617637517E /* Assets.xcassets */; };
+		DD4FF19E6D178AB96AE066A5 /* OpenScreensCore in Frameworks */ = {isa = PBXBuildFile; productRef = 884B9F3B2A26D3803168967C /* OpenScreensCore */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		09FFA95AEF8BCFF5C17022BD /* OpenScreens.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = OpenScreens.entitlements; sourceTree = "<group>"; };
+		53AA2E1792258B059AFA1E10 /* OpenScreensKit */ = {isa = PBXFileReference; lastKnownFileType = folder; name = OpenScreensKit; path = Packages/OpenScreensKit; sourceTree = SOURCE_ROOT; };
+		5667D7A07CC8C4897DA52F09 /* OpenScreensApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenScreensApp.swift; sourceTree = "<group>"; };
+		9435DCF3227A4B7B8F8D2DB7 /* OpenScreens.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = OpenScreens.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		98E870A4338DEB424CCC0C5E /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		9D1B1FE9A421BC617637517E /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		E2BF213BE8A90354C517D92D /* Base.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Base.xcconfig; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		049F985C5F4192C7FEDC5C0A /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				33C31112E4BF4D10A0EB1D18 /* OpenScreensUI in Frameworks */,
+				DD4FF19E6D178AB96AE066A5 /* OpenScreensCore in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		4855F235CB5295CC48ADD951 /* Apps */ = {
+			isa = PBXGroup;
+			children = (
+				633439486FE23EB40FECE532 /* macOS */,
+				AF4F25CBA2B36873C2A5F4D0 /* Shared */,
+			);
+			path = Apps;
+			sourceTree = "<group>";
+		};
+		633439486FE23EB40FECE532 /* macOS */ = {
+			isa = PBXGroup;
+			children = (
+				98E870A4338DEB424CCC0C5E /* Info.plist */,
+				09FFA95AEF8BCFF5C17022BD /* OpenScreens.entitlements */,
+				5667D7A07CC8C4897DA52F09 /* OpenScreensApp.swift */,
+			);
+			path = macOS;
+			sourceTree = "<group>";
+		};
+		63CCCA18B9F6B68095023D77 = {
+			isa = PBXGroup;
+			children = (
+				4855F235CB5295CC48ADD951 /* Apps */,
+				DD16F372E099448287B9F1F6 /* Config */,
+				69C1804D499774AB6F017EEE /* Packages */,
+				E590E3626B8B9DBF84E51413 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		69C1804D499774AB6F017EEE /* Packages */ = {
+			isa = PBXGroup;
+			children = (
+				53AA2E1792258B059AFA1E10 /* OpenScreensKit */,
+			);
+			path = Packages;
+			sourceTree = "<group>";
+		};
+		AF4F25CBA2B36873C2A5F4D0 /* Shared */ = {
+			isa = PBXGroup;
+			children = (
+				9D1B1FE9A421BC617637517E /* Assets.xcassets */,
+			);
+			path = Shared;
+			sourceTree = "<group>";
+		};
+		DD16F372E099448287B9F1F6 /* Config */ = {
+			isa = PBXGroup;
+			children = (
+				E2BF213BE8A90354C517D92D /* Base.xcconfig */,
+			);
+			path = Config;
+			sourceTree = "<group>";
+		};
+		E590E3626B8B9DBF84E51413 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				9435DCF3227A4B7B8F8D2DB7 /* OpenScreens.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		CBC80993B877F70B11D25A27 /* OpenScreens */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = FB87AF73D8251B2190CA582D /* Build configuration list for PBXNativeTarget "OpenScreens" */;
+			buildPhases = (
+				5A25FA7C00D62280DD6E5594 /* Sources */,
+				6446C290DB909715BD362120 /* Resources */,
+				049F985C5F4192C7FEDC5C0A /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = OpenScreens;
+			packageProductDependencies = (
+				6CBFB62E94001AE5A77A8AB6 /* OpenScreensUI */,
+				884B9F3B2A26D3803168967C /* OpenScreensCore */,
+			);
+			productName = OpenScreens;
+			productReference = 9435DCF3227A4B7B8F8D2DB7 /* OpenScreens.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		F0B2FF0D5B099A65047FBF0D /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1430;
+				TargetAttributes = {
+					CBC80993B877F70B11D25A27 = {
+						ProvisioningStyle = Automatic;
+					};
+				};
+			};
+			buildConfigurationList = 0F21CEF49E6007823A074EB3 /* Build configuration list for PBXProject "OpenScreens" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = 63CCCA18B9F6B68095023D77;
+			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				F5A26568ECC8D1C02F99E2E1 /* XCLocalSwiftPackageReference "Packages/OpenScreensKit" */,
+			);
+			preferredProjectObjectVersion = 77;
+			productRefGroup = E590E3626B8B9DBF84E51413 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				CBC80993B877F70B11D25A27 /* OpenScreens */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		6446C290DB909715BD362120 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A203453761CD80B71EB414DA /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		5A25FA7C00D62280DD6E5594 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				928EDC606268DA95EB82703A /* OpenScreensApp.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		3E3C2331F8046C9C687BB812 /* Release */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = E2BF213BE8A90354C517D92D /* Base.xcconfig */;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+			};
+			name = Release;
+		};
+		A3799C928A9574F209943256 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = E2BF213BE8A90354C517D92D /* Base.xcconfig */;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		B5F2DF7DA34BBB05692DB7FA /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = Apps/macOS/OpenScreens.entitlements;
+				COMBINE_HIDPI_IMAGES = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				INFOPLIST_FILE = Apps/macOS/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "$(OPENSCREENS_BUNDLE_ID)";
+				PRODUCT_NAME = OpenScreens;
+				SDKROOT = macosx;
+			};
+			name = Debug;
+		};
+		E6D28AE314FAE07AE672B154 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = Apps/macOS/OpenScreens.entitlements;
+				COMBINE_HIDPI_IMAGES = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				INFOPLIST_FILE = Apps/macOS/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "$(OPENSCREENS_BUNDLE_ID)";
+				PRODUCT_NAME = OpenScreens;
+				SDKROOT = macosx;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		0F21CEF49E6007823A074EB3 /* Build configuration list for PBXProject "OpenScreens" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A3799C928A9574F209943256 /* Debug */,
+				3E3C2331F8046C9C687BB812 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		FB87AF73D8251B2190CA582D /* Build configuration list for PBXNativeTarget "OpenScreens" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				B5F2DF7DA34BBB05692DB7FA /* Debug */,
+				E6D28AE314FAE07AE672B154 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		F5A26568ECC8D1C02F99E2E1 /* XCLocalSwiftPackageReference "Packages/OpenScreensKit" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/OpenScreensKit;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		6CBFB62E94001AE5A77A8AB6 /* OpenScreensUI */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = OpenScreensUI;
+		};
+		884B9F3B2A26D3803168967C /* OpenScreensCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = OpenScreensCore;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = F0B2FF0D5B099A65047FBF0D /* Project object */;
+}
