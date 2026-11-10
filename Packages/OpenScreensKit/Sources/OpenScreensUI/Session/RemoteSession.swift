@@ -632,6 +632,10 @@ public final class RemoteSession: Identifiable {
         viewport.scaling = newSettings.scaling
         requestedQuality = newSettings.quality
         clipboard.sharedClipboardEnabled = newSettings.sharedClipboard && !newSettings.observeOnly
+        if newSettings.observeOnly, !old.observeOnly, isConnected {
+            // Nothing may stay held on the other side once input stops.
+            releaseHardwareKeys()
+        }
         engine.videoBandRenderer.setBrightnessGain(newSettings.brightnessBoost)
         engine.secondaryVideoBandRenderer.setBrightnessGain(newSettings.brightnessBoost)
 
