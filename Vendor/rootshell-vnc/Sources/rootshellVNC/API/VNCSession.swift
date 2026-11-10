@@ -838,6 +838,13 @@ public final class VNCSession {
     /// Known once the handshake reaches ServerInit, before any typing.
     public private(set) var serverUsesAppleModifierConvention = false
 
+    /// Whether key events reach the server as Apple's version-2 events: a Mac
+    /// the viewer authenticated to with an Apple method. Such a server posts
+    /// the key code sent with `sendKeyEvent(downFlag:key:keyCode:)` as given,
+    /// and its key events are encrypted even when the screen is not. Any
+    /// other server ignores the key code and reads the keysym.
+    public private(set) var serverTakesKeyCodes = false
+
     /// Number of independently decoded Apple video displays in the current
     /// media generation.
     public private(set) var activeVideoDisplayCount: Int = 1
@@ -1561,12 +1568,12 @@ public final class VNCSession {
             switch event {
             case .key(let downFlag, let keysym):
                 sendKeyEvent(downFlag: downFlag, key: keysym)
-            case .pause:
+            case .pause, .physicalKey:
                 enqueueInput(event)
             case .pointer(let buttonMask, let x, let y):
                 sendPointerEvent(buttonMask: buttonMask, x: x, y: y)
             case .scroll, .gesture, .clipboard, .clipboardRequest,
-                 .sharedClipboard, .curtain:
+                 .sharedClipboard, .curtain, .keyboardInputSource:
                 assertionFailure("Unexpected event in login password sequence")
             }
         }
@@ -1652,6 +1659,18 @@ public final class VNCSession {
         }
 
         enqueueInput(.key(downFlag: downFlag, keysym: key))
+    }
+
+    /// Send a key event for a key known by its position on the keyboard.
+    ///
+    /// - Parameters:
+    ///   - downFlag: `true` for key press, `false` for key release.
+    ///   - key: The X11 keysym, used by servers that do not take key codes.
+    ///   - keyCode: The macOS virtual key code of the key. Macs post exactly
+    ///     this key, which keeps shortcuts and key repeat faithful.
+    public func sendKeyEvent(downFlag: Bool, key: UInt32, keyCode: UInt16) {
+        guard connectionState.isConnected, transportSession != nil else { return }
+        enqueueInput(.physicalKey(downFlag: downFlag, keysym: key, keyCode: keyCode))
     }
 
     /// Send a pointer (mouse/touch) event to the VNC server.
@@ -1765,6 +1784,13 @@ public final class VNCSession {
             startCurtainConfirmationWatchdog(expecting: enabled)
         }
         enqueueInput(.curtain(enabled: enabled, message: message))
+    }
+
+    /// Tell an Apple server which keyboard input source this viewer types
+    /// with, such as `com.apple.keylayout.ABC`. Ordered with the input stream.
+    public func setKeyboardInputSource(_ identifier: String) {
+        guard connectionState.isConnected, transportSession != nil else { return }
+        enqueueInput(.keyboardInputSource(identifier))
     }
 
     /// Dismiss the failure notice after a host has presented it.
@@ -1993,6 +2019,9 @@ public final class VNCSession {
             offeredSecurityTypes: handshake.offeredSecurityTypes)
         if serverUsesAppleModifierConvention != usesAppleModifiers {
             serverUsesAppleModifierConvention = usesAppleModifiers
+        }
+        if serverTakesKeyCodes != handshake.usesAppleKeyEvents {
+            serverTakesKeyCodes = handshake.usesAppleKeyEvents
         }
     }
 
@@ -3960,7 +3989,7 @@ public final class VNCSession {
                   self.connectionState.isConnected,
                   let event = self.inputQueue.dequeue() {
                 switch event {
-                case .key, .pointer:
+                case .key, .physicalKey, .pointer:
                     // Drain the whole run of basic key/pointer messages that
                     // is already waiting into one socket write; scroll,
                     // gesture, and clipboard boundaries end the run.
@@ -4010,6 +4039,14 @@ public final class VNCSession {
                     } catch {
                         self.logger.warning(
                             "Failed to change curtain mode: "
+                                + error.localizedDescription)
+                    }
+                case .keyboardInputSource(let identifier):
+                    do {
+                        try await transport.setAppleKeyboardInputSource(identifier)
+                    } catch {
+                        self.logger.warning(
+                            "Failed to set the keyboard input source: "
                                 + error.localizedDescription)
                     }
                 }
@@ -4103,10 +4140,12 @@ public final class VNCSession {
         switch event {
         case .key(let downFlag, let keysym):
             return .key(downFlag: downFlag, key: keysym)
+        case .physicalKey(let downFlag, let keysym, let keyCode):
+            return .physicalKey(downFlag: downFlag, key: keysym, keyCode: keyCode)
         case .pointer(let buttonMask, let x, let y):
             return .pointer(buttonMask: buttonMask, x: x, y: y)
         case .pause, .scroll, .gesture, .clipboard, .clipboardRequest,
-             .sharedClipboard, .curtain:
+             .sharedClipboard, .curtain, .keyboardInputSource:
             return nil
         }
     }

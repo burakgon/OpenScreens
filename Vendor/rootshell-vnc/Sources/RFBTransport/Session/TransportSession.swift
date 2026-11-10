@@ -1,3 +1,4 @@
+import CommonCrypto
 import Foundation
 import RFBProtocol
 import Security
@@ -322,6 +323,9 @@ func selectedAppleMediaDisplayCount(
 /// A basic key or pointer message eligible for single-write batching.
 public enum ClientInputEvent: Sendable, Equatable {
     case key(downFlag: Bool, key: UInt32)
+    /// A key identified by position as well as by keysym. `keyCode` is the
+    /// macOS virtual key code; servers that cannot use it get the keysym.
+    case physicalKey(downFlag: Bool, key: UInt32, keyCode: UInt16)
     case pointer(buttonMask: UInt8, x: UInt16, y: UInt16)
 }
 
@@ -533,6 +537,10 @@ public actor TransportSession {
     private var emittedAppleMediaControlDiagnostics = 0
     private var latestAppleMediaControlDiagnostic: String?
     private var appleSessionKey: Data?
+    /// The AES key for the body of version-2 key events. A Mac keys that
+    /// cipher from the authentication exchange and re-keys it, together with
+    /// the record layer, each time it announces new ComCryption keys.
+    private var appleKeyEventCipherKey: Data?
     private var appleEncryptedControlChannel: AESCBCChannel?
     private var appleMediaComCryptionChannel: AppleComCryptionChannel?
     private var applePreviousMediaComCryptionChannel: AppleComCryptionChannel?
@@ -1037,8 +1045,11 @@ public actor TransportSession {
         for event in events {
             switch event {
             case .key(let downFlag, let key):
-                payload.append(ClientMessage.keyEvent(
-                    downFlag: downFlag, key: key).serialize())
+                payload.append(keyEventMessage(
+                    downFlag: downFlag, keysym: key, keyCode: nil))
+            case .physicalKey(let downFlag, let key, let keyCode):
+                payload.append(keyEventMessage(
+                    downFlag: downFlag, keysym: key, keyCode: keyCode))
             case .pointer(let buttonMask, let x, let y):
                 let wireButtonMask = Self.pointerButtonMaskForWire(
                     buttonMask,
@@ -1049,6 +1060,49 @@ public actor TransportSession {
             }
         }
         try await sendClientPayload(payload)
+    }
+
+    /// Serialize one key transition for this server.
+    ///
+    /// A Mac that authenticated the viewer with an Apple method shares a key
+    /// with it, and takes key events as Apple's version-2 events: the body is
+    /// one AES block under that key and can carry the virtual key code of
+    /// the key that was pressed. Typed text, passwords included, therefore
+    /// never crosses the network readable, even in a session whose screen
+    /// content is not encrypted.
+    ///
+    /// Any other server gets the standard RFB `KeyEvent`.
+    private func keyEventMessage(downFlag: Bool, keysym: UInt32, keyCode: UInt16?) -> Data {
+        if sendsAppleKeyEvents, let cipherKey = appleKeyEventCipherKey {
+            let event = AppleKeyEvent(keysym: keysym, isDown: downFlag, keyCode: keyCode)
+            if let block = Self.aesECBEncryptBlock(event.plainBlock, key: cipherKey),
+               let message = event.wireMessage(encryptedBlock: block) {
+                return message
+            }
+        }
+        return ClientMessage.keyEvent(downFlag: downFlag, key: keysym).serialize()
+    }
+
+    /// Encrypt exactly one AES-128 block in ECB mode.
+    static func aesECBEncryptBlock(_ block: Data, key: Data) -> Data? {
+        guard block.count == kCCBlockSizeAES128, key.count == kCCKeySizeAES128 else { return nil }
+        var output = [UInt8](repeating: 0, count: kCCBlockSizeAES128)
+        var moved = 0
+        let status = block.withUnsafeBytes { input in
+            key.withUnsafeBytes { keyBytes in
+                CCCrypt(
+                    CCOperation(kCCEncrypt),
+                    CCAlgorithm(kCCAlgorithmAES),
+                    CCOptions(kCCOptionECBMode),
+                    keyBytes.baseAddress, kCCKeySizeAES128,
+                    nil,
+                    input.baseAddress, kCCBlockSizeAES128,
+                    &output, kCCBlockSizeAES128,
+                    &moved)
+            }
+        }
+        guard status == kCCSuccess, moved == kCCBlockSizeAES128 else { return nil }
+        return Data(output)
     }
 
     /// Send a pointer (mouse/touch) event to the server.
@@ -1258,6 +1312,18 @@ public actor TransportSession {
             && lastAppleRemoteSessionState?.curtainToggleAvailable == true
     }
 
+    /// Tell an Apple server which keyboard input source this viewer types
+    /// with, for example `com.apple.keylayout.ABC`. See
+    /// `AppleKeyboardInputSource`.
+    public func setAppleKeyboardInputSource(_ identifier: String) async throws {
+        guard appleServerCapabilities?.supportsServerCommand(
+            AppleKeyboardInputSource.messageType) == true,
+            let message = AppleKeyboardInputSource.wireMessage(identifier: identifier) else {
+            return
+        }
+        try await sendClientPayload(message)
+    }
+
     /// Hide or restore the remote session on the Mac's physical display.
     ///
     /// The note is shown on the curtained Mac and is only meaningful when
@@ -1316,7 +1382,16 @@ public actor TransportSession {
             offeredSecurityTypes: stateMachine.offeredSecurityTypes,
             selectedSecurityType: stateMachine.selectedSecurityType,
             contentEncryption: contentEncryption,
-            appleServerCapabilities: appleServerCapabilities)
+            appleServerCapabilities: appleServerCapabilities,
+            usesAppleKeyEvents: sendsAppleKeyEvents)
+    }
+
+    /// Whether key events currently go out as Apple version-2 events: the
+    /// server has to advertise the command, and the authentication exchange
+    /// has to have produced the key that encrypts them.
+    private var sendsAppleKeyEvents: Bool {
+        appleKeyEventCipherKey != nil
+            && appleServerCapabilities?.supportsServerCommand(AppleKeyEvent.messageType) == true
     }
 
     /// Live traffic statistics. The recent-rate window spans the time since
@@ -1866,6 +1941,7 @@ public actor TransportSession {
 
         let authResult = try await authenticator.authenticate(connection: tcp)
         appleSessionKey = authResult.appleSessionKey
+        appleKeyEventCipherKey = authResult.appleSessionKey
         log.info("Authentication completed for \(securityType)")
     }
 
@@ -4473,6 +4549,7 @@ public actor TransportSession {
         applePreviousMediaComCryptionChannel = appleMediaComCryptionChannel
         applePreviousMediaServerPacketID = appleMediaServerPacketID
         appleMediaComCryptionChannel = try AppleComCryptionChannel(key: key, iv: iv)
+        appleKeyEventCipherKey = key
         appleMediaServerPacketID = 0
         appleMediaClientPacketID = 0
         // Encrypted session: SRTP keys will follow on the control channel, so

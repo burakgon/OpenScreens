@@ -38,6 +38,9 @@ public struct TransportHandshakeInfo: Sendable, Equatable {
     /// Structured command support advertised by an Apple RFB 3.889 server;
     /// nil for regular RFB servers.
     public let appleServerCapabilities: AppleServerCapabilities?
+    /// Whether key events reach this server as Apple's version-2 events,
+    /// which are encrypted and can carry the key code of the pressed key.
+    public let usesAppleKeyEvents: Bool
 }
 
 // MARK: - Live statistics

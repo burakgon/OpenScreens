@@ -10,6 +10,8 @@ import RFBProtocol
 /// coalescing only redundant samples within one uninterrupted input run.
 enum SessionInputEvent: Sendable, Equatable {
     case key(downFlag: Bool, keysym: UInt32)
+    /// A key known by position: `keyCode` is the macOS virtual key code.
+    case physicalKey(downFlag: Bool, keysym: UInt32, keyCode: UInt16)
     /// An ordering barrier used for input sequences that remote login fields
     /// can otherwise process too quickly. This never produces an RFB message.
     case pause(nanoseconds: UInt64)
@@ -20,6 +22,7 @@ enum SessionInputEvent: Sendable, Equatable {
     case clipboardRequest
     case sharedClipboard(Bool)
     case curtain(enabled: Bool, message: String)
+    case keyboardInputSource(String)
 }
 
 struct SessionInputQueue: Sendable {
