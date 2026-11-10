@@ -369,6 +369,54 @@ private func tailscaleListedDevices(
             exitCode: 1, message: String(repeating: "x", count: 5000))
         #expect(failure == .commandFailed(String(repeating: "x", count: 200)))
     }
+
+    /// What the tool printed is shown to the user as it is. Whatever stood
+    /// in for the tool may have printed anything.
+    @Test func charactersThatAreNotTextAreLeftOutOfAComplaint() {
+        let escape = "\u{1B}", bell = "\u{7}", null = "\u{0}"
+        let complaint = "\(escape)[31mfatal\(bell): tail\(null)scaled\tis b\u{8}roken\(escape)[0m\r\nsecond line"
+        #expect(throws: TailscaleError.commandFailed("[31mfatal: tailscaled is broken[0m")) {
+            try TailscaleLocalStatus.devices(exitCode: 1, output: Data(), errorOutput: Data(complaint.utf8))
+        }
+        // Nothing but such characters is nothing said at all.
+        #expect(throws: TailscaleError.commandFailed("The status it printed could not be read.")) {
+            try TailscaleLocalStatus.devices(exitCode: 0, output: Data(count: 5000), errorOutput: Data())
+        }
+        #expect(throws: TailscaleError.commandFailed("The command exited with code 9.")) {
+            try TailscaleLocalStatus.devices(
+                exitCode: 9, output: Data(), errorOutput: Data("\(escape)\(bell)\n\(null)\(null)\n".utf8))
+        }
+    }
+
+    /// An explanation is a line or two. However much was printed, only its
+    /// beginning is read as one.
+    @Test func onlyTheBeginningOfWhatWasPrintedIsReadAsAnExplanation() {
+        let limit = TailscaleLocalStatus.explanationLimit
+        #expect(limit >= 1024 && limit <= 65536)
+
+        // Megabytes of something that is not a status.
+        var flood = Data(repeating: UInt8(ascii: "x"), count: 8 * 1024 * 1024)
+        #expect(throws: TailscaleError.commandFailed(String(repeating: "x", count: 200))) {
+            try TailscaleLocalStatus.devices(exitCode: 0, output: flood, errorOutput: Data())
+        }
+
+        // What decides is at the beginning. A phrase far into the output is
+        // not what the tool led with.
+        flood.append(Data("\nfailed to connect to local Tailscale service; is Tailscale running?\n".utf8))
+        #expect(throws: TailscaleError.commandFailed(String(repeating: "x", count: 200))) {
+            try TailscaleLocalStatus.devices(exitCode: 1, output: Data(), errorOutput: flood)
+        }
+        let early = Data("is Tailscale running?\n".utf8) + flood
+        #expect(throws: TailscaleError.notRunning) {
+            try TailscaleLocalStatus.devices(exitCode: 1, output: Data(), errorOutput: early)
+        }
+
+        // Cut where it may, the text is still text.
+        let multibyte = Data(String(repeating: "é", count: limit).utf8)
+        #expect(throws: TailscaleError.commandFailed(String(repeating: "é", count: 200))) {
+            try TailscaleLocalStatus.devices(exitCode: 1, output: Data(), errorOutput: multibyte)
+        }
+    }
 }
 
 #if os(macOS)
@@ -561,6 +609,19 @@ private final class FakeTailscale {
         #expect(try await source(running: tool.executable).devices().count == 5)
     }
 
+    @Test func aToolThatPrintsWithoutEndIsStoppedAndReported() async throws {
+        // Gigabytes, if it were let.
+        let tool = try FakeTailscale(
+            output: Data(),
+            preamble: "exec /bin/dd if=/dev/zero bs=1048576 count=8192 2>/dev/null")
+        let clock = ContinuousClock()
+        let started = clock.now
+        await #expect(throws: TailscaleError.commandFailed("The status it printed was too large to read.")) {
+            try await source(running: tool.executable, timeout: .seconds(120)).devices()
+        }
+        #expect(clock.now - started < .seconds(30))
+    }
+
     @Test func theToolIsLookedForWhereTailscaleInstallsIt() {
         #expect(TailscaleLocalSource.commandLineToolPaths == [
             "/Applications/Tailscale.app/Contents/MacOS/Tailscale",
@@ -703,6 +764,41 @@ private final class FakeHangingTailscale {
         let chosen = variables(try await TailscaleCommandLine.run(
             printEnvironment, environment: ["ONLY": "this"], timeout: .seconds(10)))
         #expect(chosen == ["ONLY": "this"])
+    }
+
+    @Test func outputIsCollectedUpToALimitAndTheToolStoppedBeyondIt() async throws {
+        let megabyte = 1 << 20
+        let printZeros = URL(fileURLWithPath: "/usr/bin/head")
+
+        // Exactly what is allowed is collected whole.
+        let allowed = try await TailscaleCommandLine.run(
+            printZeros, arguments: ["-c", "\(megabyte)", "/dev/zero"],
+            outputLimit: megabyte, timeout: .seconds(30))
+        #expect(allowed.standardOutput.count == megabyte)
+        #expect(allowed.exitCode == 0)
+
+        // One byte more is too much.
+        await #expect(throws: TailscaleCommandLine.Failure.tooMuchOutput) {
+            try await TailscaleCommandLine.run(
+                printZeros, arguments: ["-c", "\(megabyte + 1)", "/dev/zero"],
+                outputLimit: megabyte, timeout: .seconds(30))
+        }
+
+        // A tool that never stops printing is stopped, long before its time
+        // is up — and it counts whichever of the two streams it prints to.
+        let clock = ContinuousClock()
+        let started = clock.now
+        for redirection in ["", " >&2"] {
+            await #expect(throws: TailscaleCommandLine.Failure.tooMuchOutput) {
+                try await TailscaleCommandLine.run(
+                    URL(fileURLWithPath: "/bin/sh"),
+                    arguments: ["-c", "exec /bin/cat /dev/zero\(redirection)"],
+                    outputLimit: megabyte, timeout: .seconds(120))
+            }
+        }
+        #expect(clock.now - started < .seconds(30))
+        #expect(TailscaleCommandLine.outputLimit >= 4 * megabyte)
+        #expect(TailscaleCommandLine.outputLimit <= 64 * megabyte)
     }
 
     @Test func outputAndExitCodeAreCollected() async throws {

@@ -98,12 +98,37 @@ struct TailscaleLocalStatus: Decodable {
         if let status = try? JSONDecoder().decode(TailscaleLocalStatus.self, from: output) {
             return try status.devices()
         }
-        // No status: the tool explained itself in words instead.
-        let errorText = String(decoding: errorOutput, as: UTF8.self)
-        let outputText = String(decoding: output, as: UTF8.self)
+        // No status: the tool explained itself in words instead. An
+        // explanation is a line or two, so only the beginning of what was
+        // printed is read as one — whatever it is and however much there is.
+        let errorText = explanation(in: errorOutput)
+        let outputText = explanation(in: output)
         let said = errorText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             ? outputText : errorText
         throw failure(exitCode: exitCode, message: said)
+    }
+
+    /// How many bytes of what the tool printed are read as words when there
+    /// is no status in it.
+    static let explanationLimit = 4096
+
+    private static func explanation(in output: Data) -> String {
+        String(decoding: output.prefix(explanationLimit), as: UTF8.self)
+    }
+
+    /// Text fit to be shown: without the characters that are not text at
+    /// all — bells and escapes, or the NULs of something that was never
+    /// words to begin with.
+    private static func shown(_ text: some StringProtocol) -> String {
+        var shown = String.UnicodeScalarView()
+        for scalar in text.unicodeScalars {
+            if scalar == "\t" {
+                shown.append(" ")
+            } else if scalar.properties.generalCategory != .control {
+                shown.append(scalar)
+            }
+        }
+        return String(shown)
     }
 
     /// The devices in the status, this device included and marked as such.
@@ -176,6 +201,7 @@ struct TailscaleLocalStatus: Decodable {
     /// Reads the plain-text complaint the tool prints when it cannot produce
     /// a status at all.
     static func failure(exitCode: Int32, message: String) -> TailscaleError {
+        let message = String(message.prefix(explanationLimit))
         let lowered = message.lowercased()
         let saysLoggedOut = ["logged out", "not logged in", "needslogin"]
         if saysLoggedOut.contains(where: lowered.contains) {
@@ -196,7 +222,7 @@ struct TailscaleLocalStatus: Decodable {
 
         let firstLine = message
             .split(whereSeparator: \.isNewline)
-            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .map { shown($0).trimmingCharacters(in: .whitespaces) }
             .first { !$0.isEmpty }
         if let firstLine {
             return .commandFailed(String(firstLine.prefix(200)))
@@ -334,6 +360,8 @@ public struct TailscaleLocalSource: TailscaleSource {
                 timeout: timeout)
         } catch TailscaleCommandLine.Failure.timedOut {
             throw TailscaleError.timedOut
+        } catch TailscaleCommandLine.Failure.tooMuchOutput {
+            throw TailscaleError.commandFailed("The status it printed was too large to read.")
         } catch TailscaleCommandLine.Failure.couldNotStart(let reason) {
             throw TailscaleError.commandFailed(reason)
         }

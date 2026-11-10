@@ -23,7 +23,15 @@ enum TailscaleCommandLine {
         case couldNotStart(String)
         /// The tool was still running when its time was up, and was stopped.
         case timedOut
+        /// The tool printed more than it is allowed to, and was stopped.
+        case tooMuchOutput
     }
+
+    /// How much a tool may print, both streams together, before it is
+    /// stopped. Everything it prints is held in memory, so there has to be
+    /// an end to it; the status of a tailnet of ten thousand devices is
+    /// well within this.
+    static let outputLimit = 16 * 1024 * 1024
 
     /// How long the output streams may stay open after the tool has exited
     /// before what has been read is taken as everything.
@@ -39,17 +47,21 @@ enum TailscaleCommandLine {
         ["PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "HOME": NSHomeDirectory()]
     }
 
-    /// - Parameter environment: Everything the tool finds in its
-    ///   environment. This process's own is never passed on.
+    /// - Parameters:
+    ///   - environment: Everything the tool finds in its environment. This
+    ///     process's own is never passed on.
+    ///   - outputLimit: How many bytes the tool may print before it is
+    ///     stopped and the run fails with ``Failure/tooMuchOutput``.
     static func run(
         _ executable: URL,
         arguments: [String] = [],
         environment: [String: String] = minimalEnvironment,
+        outputLimit: Int = TailscaleCommandLine.outputLimit,
         timeout: Duration
     ) async throws -> Output {
         let run = Run(
             executable: executable, arguments: arguments, environment: environment,
-            timeout: timeout)
+            outputLimit: outputLimit, timeout: timeout)
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
                 run.start(continuation)
@@ -69,6 +81,7 @@ extension TailscaleCommandLine {
         private let outputPipe = Pipe()
         private let errorPipe = Pipe()
         private let timeout: Duration
+        private let outputLimit: Int
 
         private var continuation: CheckedContinuation<Output, any Error>?
         private var timer: (any DispatchSourceTimer)?
@@ -83,9 +96,11 @@ extension TailscaleCommandLine {
             executable: URL,
             arguments: [String],
             environment: [String: String],
+            outputLimit: Int,
             timeout: Duration
         ) {
             self.timeout = timeout
+            self.outputLimit = outputLimit
             process.executableURL = executable
             process.arguments = arguments
             process.environment = environment
@@ -142,14 +157,14 @@ extension TailscaleCommandLine {
         /// either way the read returns at once.
         private func read(from handle: FileHandle, isErrorStream: Bool) {
             let chunk = (try? handle.read(upToCount: 1 << 16)) ?? Data()
-            lock.withLock {
+            let isTooMuch = lock.withLock {
                 if !chunk.isEmpty {
                     if isErrorStream {
                         errorOutput.append(chunk)
                     } else {
                         output.append(chunk)
                     }
-                    return
+                    return output.count + errorOutput.count > outputLimit
                 }
                 handle.readabilityHandler = nil
                 if isErrorStream {
@@ -158,6 +173,10 @@ extension TailscaleCommandLine {
                     outputEnded = true
                 }
                 finishIfComplete()
+                return false
+            }
+            if isTooMuch {
+                stop(reportingFailure: Failure.tooMuchOutput)
             }
         }
 
@@ -180,7 +199,8 @@ extension TailscaleCommandLine {
                 }
         }
 
-        /// Ends the run early, for a timeout or a cancellation.
+        /// Ends the run early: it took too long, printed too much, or was
+        /// cancelled.
         private func stop(reportingFailure failure: any Error) {
             lock.withLock {
                 guard continuation != nil else { return }
