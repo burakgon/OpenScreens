@@ -41,7 +41,7 @@ what makes it testable:
 | `Discovery`, `Tailscale` | Finding computers: Bonjour through dns_sd, and the tailnet through Tailscale's API or local app. |
 | `SSH` | Client, tunnel, SFTP, private keys, known hosts. Built on SwiftNIO SSH. |
 | `Input` | Keysyms, key codes, and `HardwareKeyboard`, which decides what a key press means to the remote computer. |
-| `Geometry` | `Viewport`: fit, fill, zoom, pan, and mapping a point in the view to a remote pixel. |
+| `Geometry` | `Viewport`: fit, fill, zoom, pan, and mapping a point in the view to a point of the picture. `DisplayArrangement`: where two displays go in the picture, and which remote pixel a point of it stands for. |
 | `Network` | Address parsing, links, Wake-on-LAN. |
 
 **OpenScreensUI** is the app:
@@ -69,9 +69,11 @@ what makes it testable:
    tunnel it builds a transport provider from `SSHTunnelFactory`; the engine
    then makes its connection through that instead of dialling itself.
 3. The canvas reports its size, and for a desktop that follows the window the
-   engine asks the Mac for a virtual display of that size.
-4. Pointer events are mapped through `Viewport` to remote pixels. Key events
-   go through `HardwareKeyboard`.
+   engine asks the Mac for a virtual display of that size — or two, each half
+   of it.
+4. Pointer events are mapped through `Viewport` to the picture and through
+   `DisplayArrangement` to remote pixels. Key events go through
+   `HardwareKeyboard`.
 5. Ending the session releases every key and button that is down first, so
    nothing is left stuck on the other side.
 

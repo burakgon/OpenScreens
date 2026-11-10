@@ -122,6 +122,9 @@ public final class RemoteSession: Identifiable {
     @ObservationIgnored private var enteredTunnelCredentials: (username: String, password: String, remember: Bool)?
     @ObservationIgnored private var hostKeyAnswer: CheckedContinuation<Bool, Never>?
     @ObservationIgnored private var lastViewSize: CGSize = .zero
+    /// Whether two displays are shown beside or above each other. Follows
+    /// the shape of the view, and so what size was asked for each.
+    private var displayAxis: DisplayArrangement.Axis = .sideBySide
     @ObservationIgnored private var lastDisplayScale: CGFloat = 2
     @ObservationIgnored private var didRunConnectActions = false
     @ObservationIgnored private var lastStatisticsSample: (framesDecoded: UInt64, updates: UInt64, date: Date)?
@@ -228,6 +231,25 @@ public final class RemoteSession: Identifiable {
     /// Size of the remote screen being shown, in remote pixels.
     public var remoteSize: CGSize {
         engine.presentedFramebufferSize
+    }
+
+    /// How the displays being shown are laid out in the picture. One display
+    /// is the picture; two virtual ones sit beside each other or, in a tall
+    /// view, one above the other.
+    public var arrangement: DisplayArrangement {
+        let regions = engine.isHighPerformanceMode ? engine.presentedVideoDisplayRegions : []
+        guard regions.count >= 2 else { return DisplayArrangement(size: remoteSize) }
+        return DisplayArrangement(remote: regions, axis: displayAxis)
+    }
+
+    /// Remote pixels to a point of the remote desktop.
+    public var remotePixelsPerPoint: CGFloat {
+        // A desktop made to fit the view is always 2×. Any other is judged
+        // by its width: a Retina-class display has at least this many pixels.
+        if engine.isHighPerformanceMode, engine.configuration.displaySizingMode == .matchClient {
+            return 2
+        }
+        return (arrangement.remote.first?.width ?? remoteSize.width) >= 2400 ? 2 : 1
     }
 
     /// Top-left of the shown screen inside the server's whole desktop.
@@ -708,6 +730,10 @@ public final class RemoteSession: Identifiable {
     /// Asks for displays that fit the view, once its size is known.
     private func requestDisplaySize() {
         guard lastViewSize.width > 1, lastViewSize.height > 1 else { return }
+        let axis = settings.displays.axis(in: lastViewSize)
+        if displayAxis != axis {
+            displayAxis = axis
+        }
         engine.updateRemoteDisplaySize(
             viewSize: settings.displays.room(forOneDisplayIn: lastViewSize),
             displayScale: lastDisplayScale)
@@ -715,15 +741,18 @@ public final class RemoteSession: Identifiable {
 
     // MARK: - Pointer
 
+    /// A point of the picture as the server counts it: in the display it is
+    /// in, then from the corner of the server's whole desktop.
     private func wirePoint(_ point: CGPoint) -> (x: UInt16, y: UInt16) {
+        let remote = arrangement.remotePoint(for: point)
         let origin = remoteOrigin
         return (
-            UInt16(clamping: Int((point.x + origin.x).rounded(.down))),
-            UInt16(clamping: Int((point.y + origin.y).rounded(.down))))
+            UInt16(clamping: Int((remote.x + origin.x).rounded(.down))),
+            UInt16(clamping: Int((remote.y + origin.y).rounded(.down))))
     }
 
     /// Sends the pointer position and which buttons are down.
-    /// - Parameter point: Position on the shown screen, in remote pixels.
+    /// - Parameter point: Position in the picture, in remote pixels.
     public func pointer(buttons: PointerButtons, at point: CGPoint) {
         guard canSendInput else { return }
         if !buttons.isEmpty, pointerButtonsDown.isEmpty {

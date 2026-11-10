@@ -24,16 +24,25 @@ struct DisplayLayoutTests {
         #expect(room.width * 2 <= 1281)
     }
 
-    /// Half of a phone held upright is too narrow to be a desktop; each
-    /// display takes the whole view and zooming in shows one at a time.
-    @Test func twoDisplaysEachGetAllOfATallView() {
+    /// Halves of a phone held upright would be two slivers side by side.
+    /// One above the other, each display is the full width.
+    @Test func twoDisplaysShareATallViewOneAboveTheOther() {
+        let view = CGSize(width: 402, height: 875)
+        #expect(DisplayLayout.twoVirtual.axis(in: view) == .stacked)
+        #expect(DisplayLayout.twoVirtual.room(forOneDisplayIn: view) == CGSize(width: 402, height: 437))
+    }
+
+    @Test func onlyTwoVirtualDisplaysAreEverStacked() {
         let view = CGSize(width: 402, height: 874)
-        #expect(DisplayLayout.twoVirtual.room(forOneDisplayIn: view) == view)
+        #expect(DisplayLayout.single.axis(in: view) == .sideBySide)
+        #expect(DisplayLayout.allCombined.axis(in: view) == .sideBySide)
+        #expect(DisplayLayout.twoVirtual.axis(in: CGSize(width: 1280, height: 748)) == .sideBySide)
     }
 
     @Test func aSquareViewCountsAsWide() {
-        let room = DisplayLayout.twoVirtual.room(forOneDisplayIn: CGSize(width: 900, height: 900))
-        #expect(room == CGSize(width: 450, height: 900))
+        let view = CGSize(width: 900, height: 900)
+        #expect(DisplayLayout.twoVirtual.axis(in: view) == .sideBySide)
+        #expect(DisplayLayout.twoVirtual.room(forOneDisplayIn: view) == CGSize(width: 450, height: 900))
     }
 
     @Test func aLayoutThisVersionDoesNotKnowIsReadAsOneDisplay() throws {

@@ -28,7 +28,8 @@ VNC.
   frames a second, the remote Mac's sound, and a desktop created at the size
   of your window or screen — a phone held upright gets an upright desktop.
 - **One display, all of them side by side, or two virtual displays** of your
-  own.
+  own, which share the window: beside each other when it is wide, one above
+  the other on a phone held upright.
 - **Standard and Full Quality** modes for every Mac, and for Windows, Linux
   and Raspberry Pi computers running a VNC server.
 - Zoom, pan, fit, fill and actual size. A reconnect picks up where it left

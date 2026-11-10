@@ -426,6 +426,7 @@ enum DebugAutomation {
                 session.viewport.contentRect.width, session.viewport.contentRect.height,
             ],
             "displayCount": session.engine.activeVideoDisplayCount,
+            "displayFrames": session.arrangement.frames.map { [$0.minX, $0.minY, $0.width, $0.height] },
             "supportsCurtain": session.supportsCurtain,
             "isCurtained": session.isCurtained,
             "appleModifiers": session.engine.serverUsesAppleModifierConvention,

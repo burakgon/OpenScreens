@@ -173,13 +173,14 @@ public final class RemoteCanvasView: NSView {
 
     private func applyLayout() {
         let engine = session.engine
-        let remoteSize = session.remoteSize
-        if session.viewport.contentSize != remoteSize {
-            session.viewport.contentSize = remoteSize
+        let arrangement = session.arrangement
+        let pictureSize = arrangement.size
+        if session.viewport.contentSize != pictureSize {
+            session.viewport.contentSize = pictureSize
         }
         let content = session.viewport.contentRect
         let isVideo = engine.isHighPerformanceMode
-        let regions = engine.presentedVideoDisplayRegions
+        let frames = arrangement.frames
         let scale = backingScale
 
         CATransaction.begin()
@@ -191,25 +192,22 @@ public final class RemoteCanvasView: NSView {
         let primary = engine.videoBandRenderer
         let secondary = engine.secondaryVideoBandRenderer
         primary.containerLayer.isHidden = !isVideo
-        secondary.containerLayer.isHidden = !isVideo || regions.count < 2
-        if isVideo, remoteSize.width > 0, remoteSize.height > 0 {
+        secondary.containerLayer.isHidden = !isVideo || frames.count < 2
+        if isVideo, pictureSize.width > 0, pictureSize.height > 0 {
             primary.setPixelScale(scale)
             secondary.setPixelScale(scale)
             // Each display occupies its share of the picture.
-            let union = regions.dropFirst().reduce(regions.first ?? CGRect(origin: .zero, size: remoteSize)) {
-                $0.union($1)
+            let unit = content.width / pictureSize.width
+            func place(_ frame: CGRect) -> CGRect {
+                layerRect(CGRect(
+                    x: content.minX + frame.minX * unit,
+                    y: content.minY + frame.minY * unit,
+                    width: frame.width * unit,
+                    height: frame.height * unit))
             }
-            let unit = union.width > 0 ? content.width / union.width : 1
-            func frame(for region: CGRect) -> CGRect {
-                CGRect(
-                    x: content.minX + (region.minX - union.minX) * unit,
-                    y: content.minY + (region.minY - union.minY) * unit,
-                    width: region.width * unit,
-                    height: region.height * unit)
-            }
-            if regions.count >= 2 {
-                primary.setViewBounds(layerRect(frame(for: regions[0])))
-                secondary.setViewBounds(layerRect(frame(for: regions[1])))
+            if frames.count >= 2 {
+                primary.setViewBounds(place(frames[0]))
+                secondary.setViewBounds(place(frames[1]))
             } else {
                 primary.setViewBounds(layerRect(content))
             }

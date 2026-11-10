@@ -135,12 +135,11 @@ extension RemoteCanvasView: UIGestureRecognizerDelegate {
     /// Points on the remote screen per remote pixel, used so the virtual
     /// pointer covers the same physical distance at any zoom level.
     private var remotePixelsPerPoint: CGFloat {
-        // Retina-class remote desktops have twice the pixels per point.
-        session.remoteSize.width >= 2400 ? 2 : 1
+        session.remotePixelsPerPoint
     }
 
     private func setPointer(_ remote: CGPoint, send: Bool = true) {
-        let size = session.remoteSize
+        let size = session.arrangement.size
         pointerLocation = CGPoint(
             x: min(max(0, remote.x), max(0, size.width - 1)),
             y: min(max(0, remote.y), max(0, size.height - 1)))

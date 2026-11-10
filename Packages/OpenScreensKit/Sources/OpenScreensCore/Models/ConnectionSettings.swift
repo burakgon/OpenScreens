@@ -265,17 +265,25 @@ public enum DisplayLayout: String, Codable, CaseIterable, Identifiable, Sendable
         self = DisplayLayout(rawValue: raw) ?? .single
     }
 
+    /// How two displays share a view: beside each other in one that is at
+    /// least as wide as it is tall, one above the other in a taller one.
+    /// Either way each display comes out closer to the shape of a desktop
+    /// than the other way would leave it.
+    public func axis(in viewSize: CGSize) -> DisplayArrangement.Axis {
+        self == .twoVirtual && viewSize.width < viewSize.height ? .stacked : .sideBySide
+    }
+
     /// The part of a view one display is sized for when the desktop follows
-    /// the window.
-    ///
-    /// Two virtual displays are shown side by side. In a view that is wider
-    /// than it is tall each is given half the width, so together they fill
-    /// it. A taller view gives each its full size instead: half of it would
-    /// be too narrow to work in, and zooming in on one display then shows it
-    /// edge to edge.
+    /// the window: all of it, or with two virtual displays the half each one
+    /// is shown in, so that together they fill the view.
     public func room(forOneDisplayIn viewSize: CGSize) -> CGSize {
-        guard self == .twoVirtual, viewSize.width >= viewSize.height else { return viewSize }
-        return CGSize(width: (viewSize.width / 2).rounded(.down), height: viewSize.height)
+        guard self == .twoVirtual else { return viewSize }
+        switch axis(in: viewSize) {
+        case .sideBySide:
+            return CGSize(width: (viewSize.width / 2).rounded(.down), height: viewSize.height)
+        case .stacked:
+            return CGSize(width: viewSize.width, height: (viewSize.height / 2).rounded(.down))
+        }
     }
 }
 

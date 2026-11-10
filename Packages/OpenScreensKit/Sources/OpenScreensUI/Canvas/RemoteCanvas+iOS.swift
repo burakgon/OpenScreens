@@ -198,17 +198,26 @@ public final class RemoteCanvasView: UIView {
     private func applyLayout() {
         let engine = session.engine
         _ = session.canvasBridge.bottomObstruction
-        let remoteSize = session.remoteSize
-        if session.viewport.contentSize != remoteSize {
-            session.viewport.contentSize = remoteSize
+        let arrangement = session.arrangement
+        let pictureSize = arrangement.size
+        if session.viewport.contentSize != pictureSize {
+            session.viewport.contentSize = pictureSize
         }
-        if !hasPlacedPointer, remoteSize.width > 0 {
-            pointerLocation = CGPoint(x: remoteSize.width / 2, y: remoteSize.height / 2)
-            hasPlacedPointer = true
+        if pictureSize.width > 0 {
+            if !hasPlacedPointer {
+                pointerLocation = CGPoint(x: pictureSize.width / 2, y: pictureSize.height / 2)
+                hasPlacedPointer = true
+            } else {
+                // The picture can change shape under the pointer, when the
+                // desktop is resized or two displays are rearranged.
+                pointerLocation = CGPoint(
+                    x: min(max(0, pointerLocation.x), max(0, pictureSize.width - 1)),
+                    y: min(max(0, pointerLocation.y), max(0, pictureSize.height - 1)))
+            }
         }
         let content = session.viewport.contentRect
         let isVideo = engine.isHighPerformanceMode
-        let regions = engine.presentedVideoDisplayRegions
+        let frames = arrangement.frames
         let scale = displayScale
 
         CATransaction.begin()
@@ -220,24 +229,21 @@ public final class RemoteCanvasView: UIView {
         let primary = engine.videoBandRenderer
         let secondary = engine.secondaryVideoBandRenderer
         primary.containerLayer.isHidden = !isVideo
-        secondary.containerLayer.isHidden = !isVideo || regions.count < 2
-        if isVideo, remoteSize.width > 0, remoteSize.height > 0 {
+        secondary.containerLayer.isHidden = !isVideo || frames.count < 2
+        if isVideo, pictureSize.width > 0, pictureSize.height > 0 {
             primary.setPixelScale(scale)
             secondary.setPixelScale(scale)
-            let union = regions.dropFirst().reduce(regions.first ?? CGRect(origin: .zero, size: remoteSize)) {
-                $0.union($1)
-            }
-            let unit = union.width > 0 ? content.width / union.width : 1
-            func frame(for region: CGRect) -> CGRect {
+            let unit = content.width / pictureSize.width
+            func place(_ frame: CGRect) -> CGRect {
                 CGRect(
-                    x: content.minX + (region.minX - union.minX) * unit,
-                    y: content.minY + (region.minY - union.minY) * unit,
-                    width: region.width * unit,
-                    height: region.height * unit)
+                    x: content.minX + frame.minX * unit,
+                    y: content.minY + frame.minY * unit,
+                    width: frame.width * unit,
+                    height: frame.height * unit)
             }
-            if regions.count >= 2 {
-                primary.setViewBounds(frame(for: regions[0]))
-                secondary.setViewBounds(frame(for: regions[1]))
+            if frames.count >= 2 {
+                primary.setViewBounds(place(frames[0]))
+                secondary.setViewBounds(place(frames[1]))
             } else {
                 primary.setViewBounds(content)
             }
