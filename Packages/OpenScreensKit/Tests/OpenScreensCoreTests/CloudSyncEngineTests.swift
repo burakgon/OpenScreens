@@ -514,6 +514,78 @@ struct CloudSyncEngineTests {
         #expect(device.lastSync != nil)
     }
 
+    @Test func aRecordThisVersionCannotDecodeIsNotReplacedByItsOwnCopy() throws {
+        let other = SimulatedDevice()
+        let studio = other.library.add(computer("Studio"))
+        let home = other.library.addGroup(named: "Home")
+        let store = InMemoryCloudStore(values: other.store.values)
+        let device = SimulatedDevice(store: store)
+        #expect(device.library.computer(studio.id) == studio)
+        #expect(device.library.group(home.id) == home)
+
+        // A later version of the app changed the shape of a field without
+        // raising the layout version, and saved both again.
+        func reshaped(_ key: String, _ change: (inout [String: Any]) -> Void) throws -> Data {
+            let original = try #require(other.store.values[key])
+            var fields = try #require(
+                try JSONSerialization.jsonObject(with: original) as? [String: Any])
+            change(&fields)
+            fields["modifiedAt"] = Date.now.timeIntervalSinceReferenceDate + 10
+            return try JSONSerialization.data(withJSONObject: fields)
+        }
+        let laterComputer = try reshaped(key(studio)) {
+            $0["tags"] = ["work": ["colour": "red"]]
+            $0["name"] = "Renamed by the later version"
+        }
+        let laterGroup = try reshaped(key(home)) { $0["sortIndex"] = ["manual": 3] }
+        store.deliver(laterComputer, forKey: key(studio))
+        store.deliver(laterGroup, forKey: key(home))
+        store.forgetOperations()
+        device.storeChangedExternally()
+
+        // This device cannot read them. It keeps what it has, and keeps it
+        // to itself: its older copies do not go back up over the newer ones.
+        #expect(store.operations.isEmpty)
+        #expect(store.values[key(studio)] == laterComputer)
+        #expect(store.values[key(home)] == laterGroup)
+        #expect(device.library.computer(studio.id) == studio)
+        #expect(device.library.group(home.id) == home)
+        #expect(device.lastSync != nil)
+
+        // The same goes for an edit made here: there is no telling which of
+        // the two is the later one.
+        tick()
+        device.library.update(studio.id) { $0.notes = "edited here" }
+        device.engine.syncNow()
+        #expect(store.values[key(studio)] == laterComputer)
+        #expect(device.library.computer(studio.id)?.notes == "edited here")
+
+        // Deleting is deliberate, and removes it for everyone.
+        device.library.delete(studio.id)
+        #expect(store.values[key(studio)] == nil)
+        #expect(store.values[tombstoneKey(studio.id)] != nil)
+        #expect(store.values[key(home)] == laterGroup)
+    }
+
+    @Test func whatIsNotARecordOfTheItemIsDamageAndIsRepaired() throws {
+        let device = SimulatedDevice()
+        let studio = device.library.add(computer("Studio"))
+        let stored = try #require(device.store.values[key(studio)])
+        let another = String(decoding: stored, as: UTF8.self)
+            .replacing(studio.id.uuidString, with: UUID().uuidString)
+        #expect(another.utf8.count == stored.count)
+
+        for damage in [
+            "{}", "[1, 2]", #""text""#, "42", "null", #"{"id": 7}"#, #"{"id": "not an identifier"}"#,
+            #"{"host": "studio.local"}"#, "{ cut short", another,
+        ] {
+            device.store.deliver(Data(damage.utf8), forKey: key(studio))
+            device.storeChangedExternally()
+            #expect(device.store.values[key(studio)] == stored, "\(damage)")
+        }
+        #expect(device.library.computers == [studio])
+    }
+
     @Test func anItemFiledUnderAnotherItemsKeyIsNotMerged() throws {
         let other = SimulatedDevice()
         let real = other.library.add(computer("Real"))
@@ -2157,6 +2229,57 @@ struct CloudLibraryLayoutTests {
         #expect(plan.writes.isEmpty)
         #expect(plan.removals.count == 5)
         #expect(plan.violation(of: tiny) == nil)
+    }
+
+    @Test func aRecordOfTheItemThatCannotBeReadIsLeftAsItIs() throws {
+        let computer = LibraryFixtures.computer("Studio", modifiedAt: now.addingTimeInterval(-200))
+        let group = LibraryFixtures.group("Home", modifiedAt: now.addingTimeInterval(-200))
+        let document = LibraryDocument(computers: [computer], groups: [group])
+
+        func cloud(computer computerValue: String, group groupValue: String) -> CloudSnapshot {
+            let store = InMemoryCloudStore()
+            store.set(Data(#"{"schemaVersion":1}"#.utf8), forKey: "meta")
+            store.set(Data(computerValue.utf8), forKey: "c.\(computer.id.uuidString)")
+            store.set(Data(groupValue.utf8), forKey: "g.\(group.id.uuidString)")
+            var reader = CloudReader()
+            return reader.read(store)
+        }
+
+        // Records of these very items, in a shape this version does not read.
+        let later = cloud(
+            computer: #"{"id":"\#(computer.id.uuidString)","host":{"name":"studio.local"}}"#,
+            group: #"{"id":"\#(group.id.uuidString.lowercased())","name":["Home"]}"#)
+        #expect(later.unreadable == [.computer(computer.id), .group(group.id)])
+        #expect(try makePlan(document, against: later).isEmpty)
+
+        // Anything else under those keys is damage, and is replaced.
+        let damaged = cloud(computer: #"{"id":"\#(UUID().uuidString)","host":"x"}"#, group: "[]")
+        #expect(damaged.unreadable == [.computer(computer.id), .group(group.id)])
+        #expect(try makePlan(document, against: damaged).writes.map(\.key)
+            == [.group(group.id), .computer(computer.id)])
+
+        // A deletion still removes what cannot be read.
+        let deleting = try makePlan(
+            LibraryDocument(tombstones: [
+                computer.id.uuidString: now.addingTimeInterval(-10),
+                group.id.uuidString: now.addingTimeInterval(-10),
+            ]),
+            against: later)
+        #expect(Set(deleting.removals) == [.computer(computer.id), .group(group.id)])
+    }
+
+    @Test func aRecordIsToldFromDamageByTheItemItNames() {
+        let id = UUID()
+        func isRecord(_ text: String) -> Bool { CloudCoding.isRecord(Data(text.utf8), of: id) }
+        #expect(isRecord(#"{"id":"\#(id.uuidString)"}"#))
+        #expect(isRecord(#"{"somethingNew":[1,2],"id":"\#(id.uuidString.lowercased())"}"#))
+        #expect(!isRecord(#"{"id":"\#(UUID().uuidString)"}"#))
+        #expect(!isRecord(#"{"id":12}"#))
+        #expect(!isRecord(#"{"identifier":"\#(id.uuidString)"}"#))
+        #expect(!isRecord(#"["\#(id.uuidString)"]"#))
+        #expect(!isRecord(#""\#(id.uuidString)""#))
+        #expect(!isRecord("{ cut short"))
+        #expect(!isRecord(""))
     }
 
     @Test func aPlanThatAddsNoKeysIsAllowedInAStoreThatIsAlreadyOverItsLimit() throws {

@@ -110,6 +110,14 @@ enum CloudCoding {
         return covers(new, everythingIn: old)
     }
 
+    /// Whether `data` is a record of the item `id`: a JSON object that names
+    /// it. Anything else under an item's key is damage.
+    static func isRecord(_ data: Data, of id: UUID) -> Bool {
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let name = object["id"] as? String else { return false }
+        return UUID(uuidString: name) == id
+    }
+
     private static func covers(_ new: Any, everythingIn old: Any) -> Bool {
         if let old = old as? [String: Any] {
             guard let new = new as? [String: Any] else { return false }
@@ -302,8 +310,15 @@ struct CloudSyncPlan: Sendable {
             try stage(CloudMetadata(schemaVersion: schemaVersion), at: .metadata)
         }
 
-        // An item the cloud has no readable copy of is uploaded. For one it
-        // has, what goes up is what the two copies settle on —
+        // An item the cloud has no copy of is uploaded, and so is one whose
+        // value there is damaged. A value that cannot be read but is plainly
+        // a record of the item — a JSON object carrying its ID — is another
+        // matter: a later version of the app wrote it in a way this one does
+        // not understand. Putting this device's copy in its place would
+        // undo that version's work, and it would only write it again.
+        //
+        // For an item the cloud has a readable copy of, what goes up is what
+        // the two copies settle on —
         // ``Computer/resolve(_:_:)`` and ``ComputerGroup/resolve(_:_:)``: the
         // later edit; when neither is later, the one every device picks; and
         // for a computer the record of connections taken from both — unless
@@ -325,7 +340,9 @@ struct CloudSyncPlan: Sendable {
         for group in groups {
             let key = CloudKey.group(group.id)
             guard let existing = cloud.groups[group.id] else {
-                try stage(group, at: key)
+                if !Self.holdsRecordFromALaterVersion(cloud, at: key, of: group.id) {
+                    try stage(group, at: key)
+                }
                 continue
             }
             let settled = ComputerGroup.resolve(existing, group)
@@ -338,7 +355,9 @@ struct CloudSyncPlan: Sendable {
         for computer in computers {
             let key = CloudKey.computer(computer.id)
             guard let existing = cloud.computers[computer.id] else {
-                try stage(computer, at: key)
+                if !Self.holdsRecordFromALaterVersion(cloud, at: key, of: computer.id) {
+                    try stage(computer, at: key)
+                }
                 continue
             }
             let settled = Computer.resolve(existing, computer)
@@ -477,6 +496,17 @@ struct CloudSyncPlan: Sendable {
         plan.writes.removeAll { deletionsThatCanWait.contains($0.key) }
         plan.deletionsThatCanWait = []
         return plan
+    }
+
+    /// Whether the store holds, under an item's key, a record of that item
+    /// that this version could not read.
+    private static func holdsRecordFromALaterVersion(
+        _ cloud: CloudSnapshot,
+        at key: CloudKey,
+        of id: UUID
+    ) -> Bool {
+        guard cloud.unreadable.contains(key), let stored = cloud.values[key] else { return false }
+        return CloudCoding.isRecord(stored, of: id)
     }
 
     /// Whether two copies of a computer differ in nothing but when it was
