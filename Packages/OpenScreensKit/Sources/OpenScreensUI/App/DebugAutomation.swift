@@ -12,7 +12,11 @@ import SwiftUI
 ///     OPENSCREENS_QUALITY=highPerformance|standard|fullQuality
 ///     OPENSCREENS_RESOLUTION=matchWindow|remote
 ///     OPENSCREENS_DISPLAYS=single|allCombined|twoVirtual
+///     OPENSCREENS_KEYBOARD=automatic|keystrokes|unicode
+///     OPENSCREENS_KEYS="t=text|tap=cmd+c|…"           run a key script (see below)
 ///     OPENSCREENS_TYPE="text"                         type this once connected
+///     OPENSCREENS_TYPE_AFTER=1                        seconds to wait before typing
+///     OPENSCREENS_CLICK=640,400                       click at this remote pixel first
 ///     OPENSCREENS_REPORT=/path/prefix                 write prefix.json and prefix.png
 ///     OPENSCREENS_REPORT_AFTER=6                      seconds to wait after connecting
 ///     OPENSCREENS_EXIT=1                              quit after reporting
@@ -45,6 +49,9 @@ enum DebugAutomation {
             if let displays = environment["OPENSCREENS_DISPLAYS"].flatMap(DisplayLayout.init(rawValue:)) {
                 settings.displays = displays
             }
+            if let keyboard = environment["OPENSCREENS_KEYBOARD"].flatMap(KeyboardInputMode.init(rawValue:)) {
+                settings.keyboardInput = keyboard
+            }
         }
         present(session)
 
@@ -67,9 +74,29 @@ enum DebugAutomation {
             }
             if session.phase == .connected {
                 session.setStatisticsActive(true)
+                let wait = Double(environment["OPENSCREENS_TYPE_AFTER"] ?? "") ?? 1
+                if let click = environment["OPENSCREENS_CLICK"] {
+                    // "x,y" in remote pixels.
+                    let parts = click.split(separator: ",").compactMap { Double($0) }
+                    if parts.count == 2 {
+                        try? await Task.sleep(for: .seconds(wait))
+                        print("automation: click at \(parts) canSendInput=\(session.canSendInput)")
+                        session.click(.left, at: CGPoint(x: parts[0], y: parts[1]))
+                    }
+                }
+                if let source = environment["OPENSCREENS_KEYBOARD_SOURCE"] {
+                    try? await Task.sleep(for: .seconds(wait))
+                    print("automation: keyboard source \(source)")
+                    session.engine.setKeyboardInputSource(source)
+                }
                 if let text {
-                    try? await Task.sleep(for: .seconds(1))
+                    try? await Task.sleep(for: .seconds(wait))
+                    print("automation: typing \(text.count) characters canSendInput=\(session.canSendInput)")
                     session.type(text)
+                }
+                if let script = environment["OPENSCREENS_KEYS"] {
+                    try? await Task.sleep(for: .seconds(wait))
+                    await runKeyScript(script, on: session)
                 }
                 try? await Task.sleep(for: .seconds(delay))
             }
@@ -80,6 +107,135 @@ enum DebugAutomation {
                 exit(0)
             }
         }
+    }
+
+    /// Runs a key script: steps separated by `|`.
+    ///
+    ///     t=text            type text
+    ///     tap=cmd+shift+c   press and release a key with modifiers
+    ///     s=cmd+c           send a shortcut the way the toolbar does
+    ///     k=ff51,123,p      raw key event: keysym (hex), key code or `-`,
+    ///                       then d (down), u (up) or p (press and release)
+    ///     e=6,os,p          key event through the canvas (macOS): key code,
+    ///                       modifier flags (s, o, c, t, l), then d, u or p
+    ///     f=58,o            modifier change through the canvas (macOS): key
+    ///                       code and the flags that are down afterwards
+    ///     w=250             wait, in milliseconds
+    private static func runKeyScript(_ script: String, on session: RemoteSession) async {
+        for step in script.split(separator: "|") {
+            guard let separator = step.firstIndex(of: "=") else { continue }
+            let verb = step[..<separator]
+            let argument = String(step[step.index(after: separator)...])
+            switch verb {
+            case "t":
+                session.type(argument)
+            case "tap":
+                if let (modifiers, key) = parseCombination(argument) {
+                    session.tap(key, modifiers: modifiers)
+                }
+            case "s":
+                if let (modifiers, key) = parseCombination(argument) {
+                    session.send(RemoteShortcut(name: argument, modifiers: modifiers, key: key))
+                    try? await Task.sleep(for: .milliseconds(150))
+                }
+            case "k":
+                let parts = argument.split(separator: ",")
+                guard parts.count == 3, let keysym = UInt32(parts[0], radix: 16) else { continue }
+                let keyCode = UInt16(parts[1])
+                for isDown in [true, false] where parts[2] == "p" || (parts[2] == "d") == isDown {
+                    if let keyCode {
+                        session.engine.sendKeyEvent(downFlag: isDown, key: keysym, keyCode: keyCode)
+                    } else {
+                        session.engine.sendKeyEvent(downFlag: isDown, key: keysym)
+                    }
+                }
+            #if os(macOS)
+            case "e", "f":
+                sendCanvasEvent(isModifier: verb == "f", argument)
+            #endif
+            case "w":
+                try? await Task.sleep(for: .milliseconds(Int(argument) ?? 100))
+                continue
+            default:
+                print("automation: unknown key step \(step)")
+            }
+            // Keep steps apart so the log on the other side reads in order.
+            try? await Task.sleep(for: .milliseconds(60))
+        }
+    }
+
+    #if os(macOS)
+    /// Hands the session's canvas a key event, as the window would.
+    private static func sendCanvasEvent(isModifier: Bool, _ argument: String) {
+        let parts = argument.split(separator: ",", omittingEmptySubsequences: false)
+        guard parts.count >= 2, let keyCode = UInt16(parts[0]),
+              let canvas = NSApp.windows.lazy.compactMap({ findCanvas(in: $0.contentView) }).first,
+              let window = canvas.window else {
+            print("automation: no canvas for \(argument)")
+            return
+        }
+        var flags: NSEvent.ModifierFlags = []
+        for flag in parts[1] {
+            switch flag {
+            case "s": flags.insert(.shift)
+            case "o": flags.insert(.option)
+            case "c": flags.insert(.command)
+            case "t": flags.insert(.control)
+            case "l": flags.insert(.capsLock)
+            default: break
+            }
+        }
+        func event(_ type: NSEvent.EventType) -> NSEvent? {
+            NSEvent.keyEvent(
+                with: type, location: .zero, modifierFlags: flags,
+                timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: window.windowNumber, context: nil,
+                characters: "", charactersIgnoringModifiers: "",
+                isARepeat: false, keyCode: keyCode)
+        }
+        if isModifier {
+            event(.flagsChanged).map(canvas.flagsChanged(with:))
+            return
+        }
+        let action = parts.count > 2 ? parts[2] : "p"
+        if action == "d" || action == "p" {
+            event(.keyDown).map(canvas.keyDown(with:))
+        }
+        if action == "u" || action == "p" {
+            event(.keyUp).map(canvas.keyUp(with:))
+        }
+    }
+
+    private static func findCanvas(in view: NSView?) -> RemoteCanvasView? {
+        guard let view else { return nil }
+        if let canvas = view as? RemoteCanvasView {
+            return canvas
+        }
+        return view.subviews.lazy.compactMap { findCanvas(in: $0) }.first
+    }
+    #endif
+
+    private static func parseCombination(_ text: String) -> (KeyModifiers, RemoteKey)? {
+        var modifiers: KeyModifiers = []
+        var key: RemoteKey?
+        for part in text.split(separator: "+", omittingEmptySubsequences: false) {
+            switch part {
+            case "cmd": modifiers.insert(.command)
+            case "opt": modifiers.insert(.option)
+            case "ctrl": modifiers.insert(.control)
+            case "shift": modifiers.insert(.shift)
+            case "": key = .character("+")
+            default:
+                if let special = SpecialKey(rawValue: String(part)) {
+                    key = .special(special)
+                } else if part.count > 1, part.hasPrefix("f"), let number = Int(part.dropFirst()) {
+                    key = .function(number)
+                } else {
+                    key = .character(String(part))
+                }
+            }
+        }
+        return key.map { (modifiers, $0) }
     }
 
     private static func writeReport(for session: RemoteSession, prefix: String) {
@@ -100,6 +256,7 @@ enum DebugAutomation {
             "supportsCurtain": session.supportsCurtain,
             "isCurtained": session.isCurtained,
             "appleModifiers": session.engine.serverUsesAppleModifierConvention,
+            "takesKeyCodes": session.engine.serverTakesKeyCodes,
             "cursor": String(describing: session.engine.remoteCursorPresence),
             "cursorRendering": session.engine.activeCursorRendering.rawValue,
             "encryption": String(describing: session.engine.negotiatedContentEncryption),
