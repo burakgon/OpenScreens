@@ -217,6 +217,13 @@ struct TailscaleLocalStatus: Decodable {
 /// Nothing needs setting up: if Tailscale is installed and connected, its
 /// command-line tool already knows every device. The tool is run as
 /// `tailscale status --json`, which only reads.
+///
+/// Only Tailscale's own tool is run. Whatever is found is checked for
+/// Tailscale's code signature first (``TailscaleCodeSignature``), and
+/// anything else — unsigned, or signed by someone else — counts as Tailscale
+/// not being installed. That leaves out a `tailscale` built from source or
+/// installed by a package manager, which nobody but its installer vouches
+/// for.
 public struct TailscaleLocalSource: TailscaleSource {
     /// Where the command-line tool is looked for, in order: inside the
     /// Tailscale app, then the two places a standalone install puts it.
@@ -226,40 +233,84 @@ public struct TailscaleLocalSource: TailscaleSource {
         "/opt/homebrew/bin/tailscale",
     ]
 
+    /// What the tool finds in its environment: the least any tool needs,
+    /// and the switch that makes the Tailscale app's executable act as the
+    /// command-line tool.
+    ///
+    /// The app's executable is both. It decides which to be by whether it
+    /// was started from a terminal, which it tells by `TERM` — and an app
+    /// started from the Dock has none, so that without the switch it takes
+    /// `status --json` for a request to open its window and answers "The
+    /// Tailscale GUI failed to start".
+    static let toolEnvironment: [String: String] =
+        TailscaleCommandLine.minimalEnvironment.merging(["TAILSCALE_BE_CLI": "1"]) { $1 }
+
     private let executable: URL?
     private let searchPaths: [String]
     private let timeout: Duration
+    private let isGenuine: @Sendable (URL) -> Bool
 
     /// - Parameters:
     ///   - executable: The tool to run; `nil` to look for it in
-    ///     ``commandLineToolPaths`` each time.
+    ///     ``commandLineToolPaths`` each time. Either way it is only run if
+    ///     it carries Tailscale's signature.
     ///   - timeout: How long the tool may take before it is stopped.
     public init(executable: URL? = nil, timeout: Duration = .seconds(10)) {
         self.init(
-            executable: executable, searchPaths: Self.commandLineToolPaths, timeout: timeout)
+            executable: executable, searchPaths: Self.commandLineToolPaths, timeout: timeout,
+            isGenuine: TailscaleCodeSignature.isTailscale)
     }
 
-    init(executable: URL?, searchPaths: [String], timeout: Duration) {
+    /// The initializer tests use: where to look and what counts as the
+    /// genuine tool are supplied from outside.
+    init(
+        executable: URL?,
+        searchPaths: [String],
+        timeout: Duration,
+        isGenuine: @escaping @Sendable (URL) -> Bool
+    ) {
         self.executable = executable
         self.searchPaths = searchPaths
         self.timeout = timeout
+        self.isGenuine = isGenuine
     }
 
-    /// The first of `paths` that is a file this process may execute.
+    /// The first of `paths` that is Tailscale's own tool: a file this
+    /// process may execute and that carries Tailscale's signature.
     public static func locateCommandLineTool(
         among paths: [String] = commandLineToolPaths
     ) -> URL? {
-        let fileManager = FileManager.default
-        let path = paths.first { path in
-            var isDirectory: ObjCBool = false
-            return fileManager.fileExists(atPath: path, isDirectory: &isDirectory)
-                && !isDirectory.boolValue
-                && fileManager.isExecutableFile(atPath: path)
-        }
-        return path.map { URL(fileURLWithPath: $0) }
+        locateCommandLineTool(among: paths, isGenuine: TailscaleCodeSignature.isTailscale)
     }
 
-    /// Whether a Tailscale command-line tool is present on this Mac.
+    static func locateCommandLineTool(
+        among paths: [String],
+        isGenuine: (URL) -> Bool
+    ) -> URL? {
+        for path in paths {
+            if let tool = genuineTool(at: URL(fileURLWithPath: path), isGenuine: isGenuine) {
+                return tool
+            }
+        }
+        return nil
+    }
+
+    /// The file to run for `candidate`, if it is one to run at all.
+    ///
+    /// Links are followed first, so that the file that is checked is the
+    /// file that is run, wherever a link may point a moment later.
+    private static func genuineTool(at candidate: URL, isGenuine: (URL) -> Bool) -> URL? {
+        let file = candidate.resolvingSymlinksInPath()
+        let fileManager = FileManager.default
+        var isDirectory: ObjCBool = false
+        guard fileManager.fileExists(atPath: file.path, isDirectory: &isDirectory),
+              !isDirectory.boolValue,
+              fileManager.isExecutableFile(atPath: file.path),
+              isGenuine(file) else { return nil }
+        return file
+    }
+
+    /// Whether Tailscale's command-line tool is present on this Mac.
     public static var isInstalled: Bool {
         locateCommandLineTool() != nil
     }
@@ -268,13 +319,19 @@ public struct TailscaleLocalSource: TailscaleSource {
     // actor asked, the main actor above all.
     @concurrent
     public func devices() async throws -> [TailscaleDevice] {
-        guard let executable = executable ?? Self.locateCommandLineTool(among: searchPaths) else {
+        let tool = if let executable {
+            Self.genuineTool(at: executable, isGenuine: isGenuine)
+        } else {
+            Self.locateCommandLineTool(among: searchPaths, isGenuine: isGenuine)
+        }
+        guard let tool else {
             throw TailscaleError.notInstalled
         }
         let result: TailscaleCommandLine.Output
         do {
             result = try await TailscaleCommandLine.run(
-                executable, arguments: ["status", "--json"], timeout: timeout)
+                tool, arguments: ["status", "--json"], environment: Self.toolEnvironment,
+                timeout: timeout)
         } catch TailscaleCommandLine.Failure.timedOut {
             throw TailscaleError.timedOut
         } catch TailscaleCommandLine.Failure.couldNotStart(let reason) {

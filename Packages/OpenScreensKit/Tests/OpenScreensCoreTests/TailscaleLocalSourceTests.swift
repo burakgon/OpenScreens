@@ -1,4 +1,7 @@
 import Foundation
+#if os(macOS)
+import Security
+#endif
 import Testing
 @testable import OpenScreensCore
 
@@ -383,7 +386,8 @@ private final class FakeTailscale {
     let directory: URL
     let executable: URL
 
-    init(output: Data, errorOutput: String = "", exitCode: Int = 0) throws {
+    /// - Parameter preamble: Shell commands to run before anything else.
+    init(output: Data, errorOutput: String = "", exitCode: Int = 0, preamble: String = "") throws {
         directory = FileManager.default.temporaryDirectory
             .appending(path: "OpenScreensTests-\(UUID().uuidString)", directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -396,6 +400,7 @@ private final class FakeTailscale {
         executable = directory.appending(path: "tailscale")
         let script = """
             #!/bin/sh
+            \(preamble)
             if [ "$#" -ne 2 ] || [ "$1" != "status" ] || [ "$2" != "--json" ]; then
               echo "unexpected arguments: $*" >&2
               exit 64
@@ -416,9 +421,21 @@ private final class FakeTailscale {
 
 @Suite struct TailscaleLocalSourceTests {
 
+    /// A source that takes the stand-in for the genuine tool. What the
+    /// genuine tool is has tests of its own, further down.
+    private func source(
+        running executable: URL?,
+        lookingIn searchPaths: [String] = [],
+        timeout: Duration = .seconds(10)
+    ) -> TailscaleLocalSource {
+        TailscaleLocalSource(
+            executable: executable, searchPaths: searchPaths, timeout: timeout,
+            isGenuine: { _ in true })
+    }
+
     @Test func devicesAreListedByRunningTheTool() async throws {
         let tool = try FakeTailscale(output: tailscaleStatusJSON())
-        let devices = try await TailscaleLocalSource(executable: tool.executable).devices()
+        let devices = try await source(running: tool.executable).devices()
         #expect(devices.map(\.name) == ["Studio", "Mini Server", "atlas", "phone", "old-timer"])
         #expect(devices.filter(\.isSelf).map(\.id) == ["nSTUDIO11CNTRL"])
     }
@@ -426,14 +443,14 @@ private final class FakeTailscale {
     @Test func aStoppedTailscaleIsATypedError() async throws {
         let tool = try FakeTailscale(output: tailscaleStatusJSON(state: "Stopped"))
         await #expect(throws: TailscaleError.notRunning) {
-            try await TailscaleLocalSource(executable: tool.executable).devices()
+            try await source(running: tool.executable).devices()
         }
     }
 
     @Test func aSignedOutTailscaleIsATypedError() async throws {
         let tool = try FakeTailscale(output: tailscaleStatusJSON(state: "NeedsLogin"))
         await #expect(throws: TailscaleError.loggedOut) {
-            try await TailscaleLocalSource(executable: tool.executable).devices()
+            try await source(running: tool.executable).devices()
         }
     }
 
@@ -443,15 +460,13 @@ private final class FakeTailscale {
             errorOutput: "failed to connect to local Tailscale service; is Tailscale running?\n",
             exitCode: 1)
         await #expect(throws: TailscaleError.notRunning) {
-            try await TailscaleLocalSource(executable: tool.executable).devices()
+            try await source(running: tool.executable).devices()
         }
     }
 
     @Test func aMissingToolMeansNotInstalled() async {
-        let source = TailscaleLocalSource(
-            executable: nil,
-            searchPaths: ["/nonexistent/OpenScreensTests/tailscale"],
-            timeout: .seconds(5))
+        let source = source(
+            running: nil, lookingIn: ["/nonexistent/OpenScreensTests/tailscale"], timeout: .seconds(5))
         await #expect(throws: TailscaleError.notInstalled) {
             try await source.devices()
         }
@@ -459,17 +474,14 @@ private final class FakeTailscale {
 
     @Test func theToolIsFoundAmongTheSearchPaths() async throws {
         let tool = try FakeTailscale(output: tailscaleStatusJSON())
-        let source = TailscaleLocalSource(
-            executable: nil,
-            searchPaths: ["/nonexistent/OpenScreensTests/tailscale", tool.executable.path],
-            timeout: .seconds(10))
+        let source = source(
+            running: nil, lookingIn: ["/nonexistent/OpenScreensTests/tailscale", tool.executable.path])
         #expect(try await source.devices().count == 5)
     }
 
     @Test func aToolThatHangsIsStoppedAndReported() async throws {
         let tool = try FakeHangingTailscale()
-        let source = TailscaleLocalSource(
-            executable: tool.executable, searchPaths: [], timeout: .milliseconds(300))
+        let source = source(running: tool.executable, timeout: .milliseconds(300))
         let clock = ContinuousClock()
         let started = clock.now
         await #expect(throws: TailscaleError.timedOut) {
@@ -498,12 +510,55 @@ private final class FakeTailscale {
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: second.path)
 
         let found = TailscaleLocalSource.locateCommandLineTool(
-            among: [missing, plainFile.path, folder.path, tool.path, second.path])
+            among: [missing, plainFile.path, folder.path, tool.path, second.path],
+            isGenuine: { _ in true })
         #expect(found?.path == tool.path)
         #expect(
-            TailscaleLocalSource.locateCommandLineTool(among: [missing, plainFile.path, folder.path])
-                == nil)
-        #expect(TailscaleLocalSource.locateCommandLineTool(among: []) == nil)
+            TailscaleLocalSource.locateCommandLineTool(
+                among: [missing, plainFile.path, folder.path], isGenuine: { _ in true }) == nil)
+        #expect(TailscaleLocalSource.locateCommandLineTool(among: [], isGenuine: { _ in true }) == nil)
+
+        // A file that is not the genuine tool is passed over for the next.
+        let onlySecond = TailscaleLocalSource.locateCommandLineTool(
+            among: [tool.path, second.path], isGenuine: { $0.lastPathComponent == "second" })
+        #expect(onlySecond?.path == second.path)
+        #expect(
+            TailscaleLocalSource.locateCommandLineTool(
+                among: [tool.path, second.path], isGenuine: { _ in false }) == nil)
+
+        // A link is followed, and what it leads to is what is checked and run.
+        let link = directory.appending(path: "link")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: second)
+        var checked: [String] = []
+        let throughLink = TailscaleLocalSource.locateCommandLineTool(among: [link.path]) {
+            checked.append($0.lastPathComponent)
+            return true
+        }
+        #expect(throughLink?.lastPathComponent == "second")
+        #expect(checked == ["second"])
+    }
+
+    /// The Tailscale app's executable is the app and the command-line tool
+    /// in one, and takes itself for the app unless it is told otherwise or
+    /// finds itself in a terminal. This app is started from the Dock, where
+    /// there is no terminal to find.
+    @Test func theToolIsToldToBeACommandLineToolAndGetsNothingOfThisProcesssEnvironment() async throws {
+        setenv("OPENSCREENS_TEST_ONLY_IN_THE_APP", "must not travel", 1)
+        defer { unsetenv("OPENSCREENS_TEST_ONLY_IN_THE_APP") }
+
+        let tool = try FakeTailscale(
+            output: tailscaleStatusJSON(),
+            preamble: """
+                if [ "$TAILSCALE_BE_CLI" != "1" ]; then
+                  echo "The Tailscale GUI failed to start: The operation couldn’t be completed."
+                  exit 0
+                fi
+                if [ -n "$OPENSCREENS_TEST_ONLY_IN_THE_APP" ]; then
+                  echo "was handed the environment of the app" >&2
+                  exit 70
+                fi
+                """)
+        #expect(try await source(running: tool.executable).devices().count == 5)
     }
 
     @Test func theToolIsLookedForWhereTailscaleInstallsIt() {
@@ -535,7 +590,120 @@ private final class FakeHangingTailscale {
     }
 }
 
+@Suite struct TailscaleCodeSignatureTests {
+    private static let installedTool = "/Applications/Tailscale.app/Contents/MacOS/Tailscale"
+
+    private func makeDirectory() throws -> URL {
+        let directory = FileManager.default.temporaryDirectory
+            .appending(path: "OpenScreensTests-\(UUID().uuidString)", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory
+    }
+
+    /// A program put where the tool is looked for by whoever could write
+    /// there. If it were ever run it would leave a mark.
+    @Test func aToolThatIsNotTailscalesOwnIsNeverRun() async throws {
+        let directory = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let mark = directory.appending(path: "was-run")
+        let planted = directory.appending(path: "tailscale")
+        try Data("#!/bin/sh\n/usr/bin/touch '\(mark.path)'\necho '{}'\n".utf8).write(to: planted)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: planted.path)
+
+        // Named outright, and found where the tool is looked for.
+        await #expect(throws: TailscaleError.notInstalled) {
+            try await TailscaleLocalSource(executable: planted).devices()
+        }
+        let found = TailscaleLocalSource(
+            executable: nil, searchPaths: [planted.path], timeout: .seconds(10),
+            isGenuine: TailscaleCodeSignature.isTailscale)
+        await #expect(throws: TailscaleError.notInstalled) {
+            try await found.devices()
+        }
+        #expect(TailscaleLocalSource.locateCommandLineTool(among: [planted.path]) == nil)
+
+        #expect(!FileManager.default.fileExists(atPath: mark.path))
+    }
+
+    @Test func onlyTailscalesSignatureMakesAToolGenuine() async throws {
+        let directory = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let script = directory.appending(path: "script")
+        try Data("#!/bin/sh\n".utf8).write(to: script)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+
+        // Not signed at all; signed by Apple, as something else; not there;
+        // not a file.
+        #expect(!TailscaleCodeSignature.isTailscale(script))
+        #expect(!TailscaleCodeSignature.isTailscale(URL(fileURLWithPath: "/bin/ls")))
+        #expect(!TailscaleCodeSignature.isTailscale(directory.appending(path: "missing")))
+        #expect(!TailscaleCodeSignature.isTailscale(directory))
+
+        // A program that merely calls itself Tailscale: anyone can sign
+        // their own under any identifier they like.
+        let impostor = directory.appending(path: "tailscale")
+        try FileManager.default.copyItem(at: URL(fileURLWithPath: "/bin/echo"), to: impostor)
+        let signing = try await TailscaleCommandLine.run(
+            URL(fileURLWithPath: "/usr/bin/codesign"),
+            arguments: ["--force", "--sign", "-", "--identifier", "io.tailscale.ipn.macos", impostor.path],
+            timeout: .seconds(60))
+        try #require(signing.exitCode == 0)
+        #expect(!TailscaleCodeSignature.isTailscale(impostor))
+    }
+
+    @Test func theRequirementIsOneTheSystemUnderstandsAndNamesTailscale() {
+        var requirement: SecRequirement?
+        #expect(
+            SecRequirementCreateWithString(
+                TailscaleCodeSignature.requirement as CFString, [], &requirement) == errSecSuccess)
+        #expect(requirement != nil)
+        #expect(TailscaleCodeSignature.teamIdentifier == "W5364U7YZB")
+        #expect(TailscaleCodeSignature.requirement.contains(#"subject.OU] = "W5364U7YZB""#))
+        #expect(TailscaleCodeSignature.requirement.contains(#"identifier "io.tailscale.ipn.macos""#))
+        #expect(TailscaleCodeSignature.identifiers.allSatisfy { $0.hasPrefix("io.tailscale.ipn.") })
+    }
+
+    /// Only where the Tailscale app is installed. Nothing is run: its
+    /// signature is read.
+    @Test(.enabled(if: FileManager.default.isExecutableFile(atPath: installedTool)))
+    func theTailscaleAppOnThisMacIsRecognised() {
+        #expect(TailscaleCodeSignature.isTailscale(URL(fileURLWithPath: Self.installedTool)))
+        #expect(TailscaleLocalSource.locateCommandLineTool()?.path == Self.installedTool)
+        #expect(TailscaleLocalSource.isInstalled)
+    }
+}
+
 @Suite struct TailscaleCommandLineTests {
+
+    @Test func aToolGetsAnEnvironmentOfItsOwn() async throws {
+        setenv("OPENSCREENS_TEST_NOT_FOR_ANY_TOOL", "must not travel", 1)
+        defer { unsetenv("OPENSCREENS_TEST_NOT_FOR_ANY_TOOL") }
+        let printEnvironment = URL(fileURLWithPath: "/usr/bin/env")
+        func variables(_ output: TailscaleCommandLine.Output) -> [String: String] {
+            var variables: [String: String] = [:]
+            for line in String(decoding: output.standardOutput, as: UTF8.self).split(separator: "\n") {
+                let parts = line.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
+                variables[String(parts[0])] = parts.count > 1 ? String(parts[1]) : ""
+            }
+            return variables
+        }
+
+        // Unless told otherwise: where the system's programs are, and home.
+        let plain = variables(try await TailscaleCommandLine.run(printEnvironment, timeout: .seconds(10)))
+        #expect(plain == ["PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "HOME": NSHomeDirectory()])
+
+        // The Tailscale tool gets one thing more.
+        let tailscale = variables(try await TailscaleCommandLine.run(
+            printEnvironment, environment: TailscaleLocalSource.toolEnvironment, timeout: .seconds(10)))
+        #expect(tailscale == [
+            "PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "HOME": NSHomeDirectory(), "TAILSCALE_BE_CLI": "1",
+        ])
+
+        // And exactly what it is given otherwise.
+        let chosen = variables(try await TailscaleCommandLine.run(
+            printEnvironment, environment: ["ONLY": "this"], timeout: .seconds(10)))
+        #expect(chosen == ["ONLY": "this"])
+    }
 
     @Test func outputAndExitCodeAreCollected() async throws {
         let result = try await TailscaleCommandLine.run(

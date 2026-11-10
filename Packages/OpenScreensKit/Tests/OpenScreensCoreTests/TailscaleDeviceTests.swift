@@ -191,7 +191,7 @@ import Testing
         #expect(
             TailscaleError.server(status: 502, message: nil).errorDescription
                 == "Tailscale returned an error (HTTP 502).")
-        #expect(TailscaleError.notInstalled.errorDescription == "Tailscale is not installed on this Mac.")
+        #expect(TailscaleError.notInstalled.errorDescription == "The Tailscale app is not installed on this Mac.")
         #expect(TailscaleError.notRunning.errorDescription?.hasPrefix("Tailscale is not running") == true)
         #expect(TailscaleError.loggedOut.errorDescription?.hasPrefix("Tailscale is signed out") == true)
 

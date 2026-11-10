@@ -188,7 +188,8 @@ public enum TailscaleError: LocalizedError, Equatable, Sendable {
 
     // MARK: Tailscale on this Mac
 
-    /// No Tailscale command-line tool was found.
+    /// The Tailscale app's command-line tool was not found. A tool that is
+    /// not Tailscale's own counts as not being there.
     case notInstalled
     /// Tailscale is installed but stopped, or its background service is not
     /// running.
@@ -225,7 +226,7 @@ public enum TailscaleError: LocalizedError, Equatable, Sendable {
         case .unreadableResponse:
             "Tailscale sent a response that could not be read."
         case .notInstalled:
-            "Tailscale is not installed on this Mac."
+            "The Tailscale app is not installed on this Mac."
         case .notRunning:
             "Tailscale is not running. Open Tailscale and connect, then try again."
         case .loggedOut:

@@ -6,9 +6,11 @@ import Foundation
 ///
 /// The tool is started straight from its path with its arguments as a list.
 /// No shell is involved, so nothing in a path or an argument is ever
-/// interpreted. Nothing here blocks a thread: output is gathered as it
-/// arrives, and the caller is resumed when the tool exits, runs out of time,
-/// or the calling task is cancelled.
+/// interpreted. It is given an environment of its own rather than this
+/// app's, which can hold anything — tokens of other tools among it — when
+/// the app was started from a terminal. Nothing here blocks a thread: output
+/// is gathered as it arrives, and the caller is resumed when the tool exits,
+/// runs out of time, or the calling task is cancelled.
 enum TailscaleCommandLine {
     struct Output: Equatable, Sendable {
         var exitCode: Int32
@@ -29,12 +31,25 @@ enum TailscaleCommandLine {
     /// How long a tool that was asked to stop has before it is killed.
     static let terminationGracePeriod: DispatchTimeInterval = .seconds(2)
 
+    /// The least a tool needs: where the system's own programs are, and
+    /// whose home it is working in. Nothing is taken over from this
+    /// process — not even its search path, which may lead through folders
+    /// anyone can write to.
+    static var minimalEnvironment: [String: String] {
+        ["PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "HOME": NSHomeDirectory()]
+    }
+
+    /// - Parameter environment: Everything the tool finds in its
+    ///   environment. This process's own is never passed on.
     static func run(
         _ executable: URL,
         arguments: [String] = [],
+        environment: [String: String] = minimalEnvironment,
         timeout: Duration
     ) async throws -> Output {
-        let run = Run(executable: executable, arguments: arguments, timeout: timeout)
+        let run = Run(
+            executable: executable, arguments: arguments, environment: environment,
+            timeout: timeout)
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
                 run.start(continuation)
@@ -64,10 +79,16 @@ extension TailscaleCommandLine {
         private var errorEnded = false
         private var exitCode: Int32?
 
-        init(executable: URL, arguments: [String], timeout: Duration) {
+        init(
+            executable: URL,
+            arguments: [String],
+            environment: [String: String],
+            timeout: Duration
+        ) {
             self.timeout = timeout
             process.executableURL = executable
             process.arguments = arguments
+            process.environment = environment
             process.standardInput = FileHandle.nullDevice
             process.standardOutput = outputPipe
             process.standardError = errorPipe
