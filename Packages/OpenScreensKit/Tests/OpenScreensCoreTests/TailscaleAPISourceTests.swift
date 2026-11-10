@@ -724,4 +724,30 @@ private final class LoopbackWebServer: @unchecked Sendable {
             #expect(!text.contains("client-id"))
         }
     }
+
+    /// `dump`, the debugger and test failures do not ask a value to describe
+    /// itself: they look inside it.
+    @Test func secretsStayOutOfWhatLooksInsideAValue() {
+        let token = TailscaleCredentials.accessToken("tskey-api-test")
+        let client = TailscaleCredentials.oauthClient(id: "client-id", secret: "tskey-client-secret")
+        let configuration = TailscaleDirectory.Configuration.api(tailnet: "example.com", credentials: client)
+        let optional: TailscaleCredentials? = token
+
+        #expect(Mirror(reflecting: token).children.isEmpty)
+        #expect(Mirror(reflecting: client).children.isEmpty)
+
+        var dumped = ""
+        dump(token, to: &dumped)
+        dump(client, to: &dumped)
+        dump(configuration, to: &dumped)
+        dump(optional, to: &dumped)
+        dump([token, client], to: &dumped)
+        dump(["credentials": client], to: &dumped)
+        #expect(!dumped.contains("tskey"))
+        #expect(!dumped.contains("client-id"))
+        // What they are is still said, and the rest of a value is still shown.
+        #expect(dumped.contains("accessToken(redacted)"))
+        #expect(dumped.contains("oauthClient(redacted)"))
+        #expect(dumped.contains("example.com"))
+    }
 }

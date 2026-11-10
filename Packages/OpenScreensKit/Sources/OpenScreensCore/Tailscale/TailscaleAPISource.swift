@@ -57,6 +57,15 @@ extension TailscaleCredentials: CustomStringConvertible, CustomDebugStringConver
     public var debugDescription: String { description }
 }
 
+// The same goes for everything that looks inside a value instead of asking
+// it for a description: `dump`, the debugger, and a test that prints what it
+// compared. There is nothing for them to see.
+extension TailscaleCredentials: CustomReflectable {
+    public var customMirror: Mirror {
+        Mirror(self, children: EmptyCollection<Mirror.Child>())
+    }
+}
+
 // MARK: - Transport
 
 /// The one thing ``TailscaleAPISource`` needs from the network. Tests supply
