@@ -35,3 +35,6 @@ AuthKey_*.p8
 
 # Local signing identity
 Config/Signing.xcconfig
+
+# Resolved versions of the vendored packages are decided by the app package
+Vendor/*/Package.resolved
