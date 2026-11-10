@@ -226,8 +226,10 @@ struct SessionEndToEndTests {
         defer { model.sessions.close(session) }
         session.start()
 
-        // A refusal is a definite answer and must not wait out a timeout.
-        #expect(await waitUntil(timeout: .seconds(4)) {
+        // The engine dials a few times, for networks that only come up when
+        // asked. A refusal ends each attempt at once, so that takes seconds
+        // rather than a connect timeout per attempt.
+        #expect(await waitUntil(timeout: .seconds(8)) {
             if case .failed = session.phase { return true }
             return false
         })
