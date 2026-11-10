@@ -28,6 +28,10 @@ public struct Computer: Identifiable, Codable, Hashable, Sendable {
     public var createdAt: Date
     public var modifiedAt: Date
     public var lastConnectedAt: Date?
+    /// When the record of connections was last cleared. A connection from
+    /// before then does not count, which is what keeps a cleared Recents
+    /// list cleared after merging with a copy that still remembers.
+    public var connectionsClearedAt: Date?
     /// Position in manually ordered lists.
     public var sortIndex: Int
 
@@ -50,6 +54,7 @@ public struct Computer: Identifiable, Codable, Hashable, Sendable {
         createdAt: Date = .now,
         modifiedAt: Date = .now,
         lastConnectedAt: Date? = nil,
+        connectionsClearedAt: Date? = nil,
         sortIndex: Int = 0
     ) {
         self.id = id
@@ -70,6 +75,7 @@ public struct Computer: Identifiable, Codable, Hashable, Sendable {
         self.createdAt = createdAt
         self.modifiedAt = modifiedAt
         self.lastConnectedAt = lastConnectedAt
+        self.connectionsClearedAt = connectionsClearedAt
         self.sortIndex = sortIndex
     }
 
@@ -108,10 +114,29 @@ public struct Computer: Identifiable, Codable, Hashable, Sendable {
         ssh = try c.decodeIfPresent(SSHSettings.self, forKey: .ssh) ?? SSHSettings()
         macAddress = try c.decodeIfPresent(String.self, forKey: .macAddress)
         origin = try c.decodeIfPresent(ComputerOrigin.self, forKey: .origin) ?? .manual
-        createdAt = try c.decodeIfPresent(Date.self, forKey: .createdAt) ?? .now
-        modifiedAt = try c.decodeIfPresent(Date.self, forKey: .modifiedAt) ?? .now
-        lastConnectedAt = try c.decodeIfPresent(Date.self, forKey: .lastConnectedAt)
-        sortIndex = try c.decodeIfPresent(Int.self, forKey: .sortIndex) ?? 0
+        // A record without a modification date is one nobody vouches for:
+        // it is the oldest there is, and loses to any other copy. Dates that
+        // are not dates at all are treated the same way.
+        modifiedAt = try c.decodeDate(forKey: .modifiedAt) ?? .distantPast
+        createdAt = try c.decodeDate(forKey: .createdAt) ?? modifiedAt
+        lastConnectedAt = try c.decodeDate(forKey: .lastConnectedAt)
+        connectionsClearedAt = try c.decodeDate(forKey: .connectionsClearedAt)
+        sortIndex = Computer.clampedSortIndex(try c.decodeIfPresent(Int.self, forKey: .sortIndex) ?? 0)
+    }
+
+    /// Keeps a position within a range that arithmetic on it cannot leave.
+    static func clampedSortIndex(_ value: Int) -> Int {
+        min(max(value, -1_000_000_000), 1_000_000_000)
+    }
+}
+
+extension KeyedDecodingContainer {
+    /// A date, or `nil` when the key is missing or its value is not a point
+    /// in time — the infinities and not-a-number that some encodings allow.
+    func decodeDate(forKey key: Key) throws -> Date? {
+        guard let date = try decodeIfPresent(Date.self, forKey: key),
+              date.timeIntervalSinceReferenceDate.isFinite else { return nil }
+        return date
     }
 }
 
@@ -259,7 +284,7 @@ public struct ComputerGroup: Identifiable, Codable, Hashable, Sendable {
         id = try c.decode(UUID.self, forKey: .id)
         name = try c.decodeIfPresent(String.self, forKey: .name) ?? ""
         symbolName = try c.decodeIfPresent(String.self, forKey: .symbolName) ?? "folder"
-        sortIndex = try c.decodeIfPresent(Int.self, forKey: .sortIndex) ?? 0
-        modifiedAt = try c.decodeIfPresent(Date.self, forKey: .modifiedAt) ?? .now
+        sortIndex = Computer.clampedSortIndex(try c.decodeIfPresent(Int.self, forKey: .sortIndex) ?? 0)
+        modifiedAt = try c.decodeDate(forKey: .modifiedAt) ?? .distantPast
     }
 }

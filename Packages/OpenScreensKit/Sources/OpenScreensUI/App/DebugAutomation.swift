@@ -14,6 +14,7 @@ import SwiftUI
 ///     OPENSCREENS_DISPLAYS=single|allCombined|twoVirtual
 ///     OPENSCREENS_KEYBOARD=automatic|keystrokes|unicode
 ///     OPENSCREENS_OBSERVE=1                           watch without sending input
+///     OPENSCREENS_LOCK_ON_DISCONNECT=1                lock the remote Mac on leaving
 ///     OPENSCREENS_TOUCH=trackpad|touch                how touches drive the pointer
 ///     OPENSCREENS_SECTION=favorites|recents|nearby|tailscale   open the library there
 ///     OPENSCREENS_TRUST_HOST_KEY=1                    accept the SSH server's key when asked
@@ -70,6 +71,9 @@ enum DebugAutomation {
             }
             if environment["OPENSCREENS_OBSERVE"] == "1" {
                 settings.observeOnly = true
+            }
+            if environment["OPENSCREENS_LOCK_ON_DISCONNECT"] == "1" {
+                settings.lockOnDisconnect = true
             }
             if let touch = environment["OPENSCREENS_TOUCH"].flatMap(TouchInputMode.init(rawValue:)) {
                 settings.touchInput = touch
@@ -157,6 +161,9 @@ enum DebugAutomation {
     ///                       modifier flags (s, o, c, t, l), then d, u or p
     ///     f=58,o            modifier change through the canvas (macOS): key
     ///                       code and the flags that are down afterwards
+    ///     clip=text         put text on the remote clipboard
+    ///     curtain=on|off    hide or show the remote Mac's own screen
+    ///     lock=1            end the session, as closing its window does
     ///     w=250             wait, in milliseconds
     private static func runKeyScript(_ script: String, on session: RemoteSession) async {
         for step in script.split(separator: "|") {
@@ -190,6 +197,13 @@ enum DebugAutomation {
             case "e", "f":
                 sendCanvasEvent(isModifier: verb == "f", argument)
             #endif
+            case "clip":
+                // Straight to the remote clipboard, leaving this device's alone.
+                session.engine.sendClipboardText(argument)
+            case "curtain":
+                session.setCurtain(argument == "on", message: "Back soon")
+            case "lock":
+                session.end()
             case "w":
                 try? await Task.sleep(for: .milliseconds(Int(argument) ?? 100))
                 continue

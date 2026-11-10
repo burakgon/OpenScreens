@@ -911,7 +911,7 @@ struct LibraryStoreTests {
         #expect(after.modifiedAt == before.modifiedAt)
     }
 
-    @Test func clearingTheRecentsIsAnEdit() throws {
+    @Test func clearingTheRecentsIsRemembered() throws {
         let (store, computers) = makeStore(computers: ["Studio"])
         store.markConnected(computers[0].id)
         let connected = try #require(store.computer(computers[0].id))
@@ -919,10 +919,29 @@ struct LibraryStoreTests {
 
         store.clearRecents()
 
-        // So a copy that still has the connection does not bring it back.
-        #expect(try #require(store.computer(connected.id)).modifiedAt > connected.modifiedAt)
+        // A copy that still has the connection does not bring it back.
         store.merge(LibraryDocument(computers: [connected]))
         #expect(store.recents.isEmpty)
+
+        // Connecting again does count.
+        store.markConnected(connected.id)
+        #expect(store.recents.map(\.name) == ["Studio"])
+        store.merge(LibraryDocument(computers: [connected]))
+        #expect(store.recents.map(\.name) == ["Studio"])
+    }
+
+    /// A position taken from a hostile or damaged record must not be able
+    /// to trap the arithmetic that numbers the next computer.
+    @Test func addingAfterAnAbsurdSortIndexDoesNotOverflow() throws {
+        let json = #"{"computers":[{"id":"11111111-2222-3333-4444-555555555555","host":"a","sortIndex":9223372036854775807}]}"#
+        let store = makeStore()
+        store.merge(try LibraryDocument.decode(Data(json.utf8)))
+
+        let added = store.add(Computer(name: "Next", host: "next.local"))
+
+        #expect(added.sortIndex > 0)
+        #expect(store.computers.count == 2)
+        #expect(throws: Never.self) { try store.exportBackup() }
     }
 
     // MARK: - Groups that are not here

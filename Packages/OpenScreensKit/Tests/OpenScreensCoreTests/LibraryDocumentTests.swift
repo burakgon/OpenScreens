@@ -320,36 +320,25 @@ struct LibraryDocumentMergeTests {
     // MARK: Connections
 
     /// Connecting is not an edit and does not touch `modifiedAt`, so the
-    /// time of the last connection is settled on its own.
-    @Test func aConnectionMadeAfterTheWinningEditIsKept() {
+    /// record of connections is settled on its own: an edit made elsewhere,
+    /// before or after, does not erase it.
+    @Test func aConnectionSurvivesAnEditMadeElsewhere() {
         let id = UUID()
-        var connectedHere = LibraryFixtures.computer("Studio", id: id, modifiedAt: ago(300))
-        connectedHere.lastConnectedAt = ago(100)
-        let renamedElsewhere = LibraryFixtures.computer("Studio, renamed", id: id, modifiedAt: ago(200))
+        for connectedAt in [ago(250), ago(100)] {
+            var connectedHere = LibraryFixtures.computer("Studio", id: id, modifiedAt: ago(300))
+            connectedHere.lastConnectedAt = connectedAt
+            let renamedElsewhere = LibraryFixtures.computer("Studio, renamed", id: id, modifiedAt: ago(200))
 
-        for merged in bothWays(
-            LibraryDocument(computers: [connectedHere]), LibraryDocument(computers: [renamedElsewhere])) {
-            #expect(merged.computers.map(\.name) == ["Studio, renamed"])
-            #expect(merged.computers.first?.lastConnectedAt == ago(100))
-            #expect(merged.computers.first?.modifiedAt == ago(200))
+            for merged in bothWays(
+                LibraryDocument(computers: [connectedHere]), LibraryDocument(computers: [renamedElsewhere])) {
+                #expect(merged.computers.map(\.name) == ["Studio, renamed"])
+                #expect(merged.computers.first?.lastConnectedAt == connectedAt)
+                #expect(merged.computers.first?.modifiedAt == ago(200))
+            }
         }
     }
 
-    /// Clearing the recents is an edit. A connection from before it does
-    /// not come back with a stale copy.
-    @Test func aConnectionFromBeforeTheWinningEditIsNotBroughtBack() {
-        let id = UUID()
-        var connectedBefore = LibraryFixtures.computer("Studio", id: id, modifiedAt: ago(300))
-        connectedBefore.lastConnectedAt = ago(250)
-        let clearedSince = LibraryFixtures.computer("Studio", id: id, modifiedAt: ago(200))
-
-        for merged in bothWays(
-            LibraryDocument(computers: [connectedBefore]), LibraryDocument(computers: [clearedSince])) {
-            #expect(merged.computers == [clearedSince])
-        }
-    }
-
-    @Test func ofTwoConnectionsToTheSameVersionTheLaterIsKept() {
+    @Test func ofTwoConnectionsTheLaterIsKept() {
         let id = UUID()
         var onMac = LibraryFixtures.computer("Studio", id: id, modifiedAt: ago(300))
         onMac.lastConnectedAt = ago(100)
@@ -360,6 +349,57 @@ struct LibraryDocumentMergeTests {
             LibraryDocument(computers: [onMac]), LibraryDocument(computers: [onPhone])) {
             #expect(merged.computers == [onPhone])
         }
+    }
+
+    /// Clearing the recents is remembered. A copy that still has the
+    /// connection does not bring it back, whichever copy is the newer.
+    @Test func aConnectionFromBeforeTheRecentsWereClearedDoesNotComeBack() {
+        let id = UUID()
+        for clearedCopyIsNewer in [true, false] {
+            var stillConnected = LibraryFixtures.computer(
+                "Studio", id: id, modifiedAt: ago(clearedCopyIsNewer ? 300 : 100))
+            stillConnected.lastConnectedAt = ago(250)
+            var cleared = LibraryFixtures.computer(
+                "Studio", id: id, modifiedAt: ago(clearedCopyIsNewer ? 100 : 300))
+            cleared.connectionsClearedAt = ago(200)
+
+            for merged in bothWays(
+                LibraryDocument(computers: [stillConnected]), LibraryDocument(computers: [cleared])) {
+                #expect(merged.computers.first?.lastConnectedAt == nil)
+                #expect(merged.computers.first?.connectionsClearedAt == ago(200))
+            }
+        }
+    }
+
+    @Test func aConnectionMadeAfterTheRecentsWereClearedCounts() {
+        let id = UUID()
+        var connectedSince = LibraryFixtures.computer("Studio", id: id, modifiedAt: ago(300))
+        connectedSince.lastConnectedAt = ago(150)
+        var cleared = LibraryFixtures.computer("Studio", id: id, modifiedAt: ago(300))
+        cleared.connectionsClearedAt = ago(200)
+
+        for merged in bothWays(
+            LibraryDocument(computers: [connectedSince]), LibraryDocument(computers: [cleared])) {
+            #expect(merged.computers.first?.lastConnectedAt == ago(150))
+            #expect(merged.computers.first?.connectionsClearedAt == ago(200))
+        }
+    }
+
+    /// Copies that differ only in when they were connected to must still
+    /// resolve the same way round.
+    @Test func copiesThatDifferOnlyInTheirConnectionsResolveTheSameWay() {
+        let id = UUID()
+        var a = LibraryFixtures.computer("Studio", id: id, modifiedAt: ago(100))
+        a.lastConnectedAt = ago(400)
+        var b = a
+        b.lastConnectedAt = ago(350)
+        var c = a
+        c.lastConnectedAt = nil
+
+        #expect(Computer.resolve(a, b) == Computer.resolve(b, a))
+        #expect(Computer.resolve(a, c) == Computer.resolve(c, a))
+        #expect(Computer.resolve(a, b).lastConnectedAt == ago(350))
+        #expect(Computer.resolve(a, c).lastConnectedAt == ago(400))
     }
 
     // MARK: Laws
@@ -661,7 +701,6 @@ struct LibraryDocumentCodingTests {
 
     @Test func aComputerNeedsOnlyAnIdentifierAndAnAddress() throws {
         let json = #"{"computers":[{"id":"11111111-2222-3333-4444-555555555555","host":"studio.local"}]}"#
-        let before = Date.now
         let computer = try #require(try LibraryDocument.decode(Data(json.utf8)).computers.first)
 
         #expect(computer.id == UUID(uuidString: "11111111-2222-3333-4444-555555555555"))
@@ -681,8 +720,35 @@ struct LibraryDocumentCodingTests {
         #expect(computer.origin == .manual)
         #expect(computer.lastConnectedAt == nil)
         #expect(computer.sortIndex == 0)
-        #expect(computer.createdAt >= before && computer.createdAt <= .now)
-        #expect(computer.modifiedAt >= before && computer.modifiedAt <= .now)
+        // A record that says nothing about when it was changed is older than
+        // any that does, so it never wins a merge by accident — and reads
+        // the same every time, which "now" would not.
+        #expect(computer.modifiedAt == .distantPast)
+        #expect(computer.createdAt == .distantPast)
+    }
+
+    /// Records can arrive from anywhere. Values that are not numbers or not
+    /// dates must not get into the library, where they could never be saved.
+    @Test func valuesThatCannotBeSavedAreReplacedWhenReading() throws {
+        let json = """
+            {"computers":[{
+                "id":"11111111-2222-3333-4444-555555555555","host":"studio.local",
+                "sortIndex":9223372036854775807,
+                "settings":{"scrollSpeed":1e999,"pointerSpeed":-5,"frameRate":100000}
+            }]}
+            """
+        let decoder = LibraryDocument.decoder()
+        decoder.nonConformingFloatDecodingStrategy = .convertFromString(
+            positiveInfinity: "inf", negativeInfinity: "-inf", nan: "nan")
+        let withInfinities = json.replacingOccurrences(of: "1e999", with: "\"inf\"")
+        let document = try decoder.decode(LibraryDocument.self, from: Data(withInfinities.utf8))
+        let computer = try #require(document.computers.first)
+
+        #expect(computer.settings.scrollSpeed == ConnectionSettings().scrollSpeed)
+        #expect(computer.settings.pointerSpeed == 0.1)
+        #expect(computer.settings.frameRate == 240)
+        #expect(computer.sortIndex == 1_000_000_000)
+        #expect(throws: Never.self) { try document.encoded() }
     }
 
     @Test func aGroupNeedsOnlyAnIdentifier() throws {

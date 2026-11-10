@@ -1426,7 +1426,13 @@ struct CloudLibraryLayoutTests {
         let data = try #require(writes.last).data
         let decoded = try CloudCoding.makeDecoder().decode(Computer.self, from: data)
 
-        #expect(decoded == computer)
+        // The record goes up, and whoever reads it gets a setting they can
+        // use and save: the default, in place of what was not a number.
+        var expected = computer
+        expected.settings.scrollSpeed = ConnectionSettings().scrollSpeed
+        expected.settings.pointerSpeed = ConnectionSettings().pointerSpeed
+        #expect(decoded == expected)
+        #expect(throws: Never.self) { try LibraryDocument(computers: [decoded]).encoded() }
     }
 
     // MARK: Planning

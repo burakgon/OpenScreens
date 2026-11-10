@@ -119,16 +119,25 @@ public struct ConnectionSettings: Codable, Hashable, Sendable {
         displays = try c.decodeIfPresent(DisplayLayout.self, forKey: .displays) ?? d.displays
         scaling = try c.decodeIfPresent(ScalingMode.self, forKey: .scaling) ?? d.scaling
         colorDepth = try c.decodeIfPresent(ColorDepth.self, forKey: .colorDepth) ?? d.colorDepth
-        frameRate = try c.decodeIfPresent(Int.self, forKey: .frameRate) ?? d.frameRate
-        brightnessBoost = try c.decodeIfPresent(Double.self, forKey: .brightnessBoost) ?? d.brightnessBoost
+        // Numbers are kept within what the interface can set. A record that
+        // came from elsewhere can say anything, and a value that is not a
+        // number at all cannot even be saved again.
+        func number(_ key: CodingKeys, in range: ClosedRange<Double>, default fallback: Double) throws -> Double {
+            guard let value = try c.decodeIfPresent(Double.self, forKey: key), value.isFinite else {
+                return fallback
+            }
+            return min(max(value, range.lowerBound), range.upperBound)
+        }
+        frameRate = min(max(try c.decodeIfPresent(Int.self, forKey: .frameRate) ?? d.frameRate, 1), 240)
+        brightnessBoost = try number(.brightnessBoost, in: 0.25...4, default: d.brightnessBoost)
         remoteAudio = try c.decodeIfPresent(Bool.self, forKey: .remoteAudio) ?? d.remoteAudio
         syncVideoToAudio = try c.decodeIfPresent(Bool.self, forKey: .syncVideoToAudio) ?? d.syncVideoToAudio
         observeOnly = try c.decodeIfPresent(Bool.self, forKey: .observeOnly) ?? d.observeOnly
         cursor = try c.decodeIfPresent(CursorMode.self, forKey: .cursor) ?? d.cursor
         touchInput = try c.decodeIfPresent(TouchInputMode.self, forKey: .touchInput) ?? d.touchInput
         naturalScrolling = try c.decodeIfPresent(Bool.self, forKey: .naturalScrolling) ?? d.naturalScrolling
-        scrollSpeed = try c.decodeIfPresent(Double.self, forKey: .scrollSpeed) ?? d.scrollSpeed
-        pointerSpeed = try c.decodeIfPresent(Double.self, forKey: .pointerSpeed) ?? d.pointerSpeed
+        scrollSpeed = try number(.scrollSpeed, in: 0.1...10, default: d.scrollSpeed)
+        pointerSpeed = try number(.pointerSpeed, in: 0.1...10, default: d.pointerSpeed)
         keyboardInput = try c.decodeIfPresent(KeyboardInputMode.self, forKey: .keyboardInput) ?? d.keyboardInput
         captureSystemShortcuts = try c.decodeIfPresent(Bool.self, forKey: .captureSystemShortcuts) ?? d.captureSystemShortcuts
         swapCommandAndControl = try c.decodeIfPresent(Bool.self, forKey: .swapCommandAndControl) ?? d.swapCommandAndControl

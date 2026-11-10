@@ -155,30 +155,35 @@ extension Computer {
 
     /// Picks between two copies of the same computer.
     ///
-    /// The later edit wins. When a computer was last connected to is not an
-    /// edit — connecting does not touch `modifiedAt` — so a connection made
-    /// after the winning edit is carried over from the losing copy.
-    fileprivate static func resolve(_ a: Computer, _ b: Computer) -> Computer {
+    /// The later edit wins. Connecting is not an edit and does not touch
+    /// `modifiedAt`, so the record of connections is settled on its own: the
+    /// latest connection either copy knows of, unless the latest clearing
+    /// either copy knows of came after it.
+    public static func resolve(_ a: Computer, _ b: Computer) -> Computer {
         guard a != b else { return a }
-        var (winner, loser) = (a, b)
+        var winner = a
         if b.modifiedAt > a.modifiedAt {
-            (winner, loser) = (b, a)
+            winner = b
         } else if b.modifiedAt == a.modifiedAt {
             // Neither is newer. Both devices must still pick the same one;
-            // the connection time is left out, as it is settled below.
+            // the record of connections is left out, as it is settled below.
             var (plainA, plainB) = (a, b)
-            plainA.lastConnectedAt = nil
-            plainB.lastConnectedAt = nil
+            for index in [\Computer.lastConnectedAt, \Computer.connectionsClearedAt] {
+                plainA[keyPath: index] = nil
+                plainB[keyPath: index] = nil
+            }
             let (bytesA, bytesB) = (LibraryDocument.canonicalBytes(plainA), LibraryDocument.canonicalBytes(plainB))
             if bytesA.lexicographicallyPrecedes(bytesB) {
-                (winner, loser) = (b, a)
+                winner = b
             }
         }
-        if let connected = loser.lastConnectedAt,
-           connected > winner.modifiedAt,
-           connected > winner.lastConnectedAt ?? .distantPast {
-            winner.lastConnectedAt = connected
+        let cleared = [a.connectionsClearedAt, b.connectionsClearedAt].compactMap(\.self).max()
+        var connected = [a.lastConnectedAt, b.lastConnectedAt].compactMap(\.self).max()
+        if let cleared, let latest = connected, latest <= cleared {
+            connected = nil
         }
+        winner.connectionsClearedAt = cleared
+        winner.lastConnectedAt = connected
         return winner
     }
 }
@@ -188,7 +193,9 @@ extension ComputerGroup {
         (a.sortIndex, a.id.uuidString) < (b.sortIndex, b.id.uuidString)
     }
 
-    fileprivate static func resolve(_ a: ComputerGroup, _ b: ComputerGroup) -> ComputerGroup {
+    /// Picks between two copies of the same group: the later edit, and on a
+    /// tie the one both devices will agree on.
+    public static func resolve(_ a: ComputerGroup, _ b: ComputerGroup) -> ComputerGroup {
         if b.modifiedAt != a.modifiedAt {
             return b.modifiedAt > a.modifiedAt ? b : a
         }

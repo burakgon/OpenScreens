@@ -115,7 +115,7 @@ public final class LibraryStore {
         copy.createdAt = now
         // Outrank the deletion of an earlier computer with the same identity.
         copy.modifiedAt = Self.stamp(after: tombstones[copy.id.uuidString], now: now)
-        copy.sortIndex = (computers.map(\.sortIndex).max() ?? -1) + 1
+        copy.sortIndex = Computer.clampedSortIndex((computers.map(\.sortIndex).max() ?? -1) + 1)
         tombstones[copy.id.uuidString] = nil
         computers.append(copy)
         didChange()
@@ -176,15 +176,21 @@ public final class LibraryStore {
     /// undo, a change made to the computer on another device.
     public func markConnected(_ id: Computer.ID) {
         guard let index = computers.firstIndex(where: { $0.id == id }) else { return }
-        computers[index].lastConnectedAt = .now
+        // Later than the last clearing, or it would not count.
+        computers[index].lastConnectedAt = Self.stamp(after: computers[index].connectionsClearedAt)
         didChange()
     }
 
     public func clearRecents() {
         var changed = false
-        for index in computers.indices where computers[index].lastConnectedAt != nil {
+        let now = Date.now
+        for index in computers.indices {
+            guard let connected = computers[index].lastConnectedAt else { continue }
             computers[index].lastConnectedAt = nil
-            computers[index].modifiedAt = Self.stamp(after: computers[index].modifiedAt)
+            // Remembered, so that a copy elsewhere that still has the
+            // connection does not bring it back.
+            computers[index].connectionsClearedAt = Self.stamp(after: connected, now: now)
+            computers[index].modifiedAt = Self.stamp(after: computers[index].modifiedAt, now: now)
             changed = true
         }
         if changed { didChange() }
@@ -240,7 +246,7 @@ public final class LibraryStore {
         let group = ComputerGroup(
             name: name,
             symbolName: symbolName,
-            sortIndex: (groups.map(\.sortIndex).max() ?? -1) + 1)
+            sortIndex: Computer.clampedSortIndex((groups.map(\.sortIndex).max() ?? -1) + 1))
         groups.append(group)
         didChange()
         return group
