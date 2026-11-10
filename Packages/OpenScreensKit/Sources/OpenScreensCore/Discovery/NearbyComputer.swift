@@ -76,7 +76,8 @@ extension NearbyComputer {
     /// Turns a host target as DNS-SD reports it (`Studio.local.`) into the
     /// form people type and that can be saved: no final dot, and with DNS
     /// presentation escapes undone (`\032` is a byte in decimal, `\.` is a
-    /// literal dot). Returns `nil` when nothing is left.
+    /// literal dot). Returns `nil` when nothing is left, and for a name with
+    /// control characters in it.
     static func normalizedHost(_ target: String) -> String? {
         let input = Array(target.trimmingCharacters(in: .whitespacesAndNewlines).utf8)
         let backslash = UInt8(ascii: "\\")
@@ -107,6 +108,11 @@ extension NearbyComputer {
         if endsWithRootDot {
             bytes.removeLast()
         }
+        // Whoever advertises a service chooses its host target, escapes and
+        // all. A name with a NUL or a line break in it is shown and saved as
+        // one thing and looked up as another — for the system's resolver the
+        // text ends at the NUL — so it is not a name to connect to.
+        guard !bytes.contains(where: { $0 < 0x20 || $0 == 0x7F }) else { return nil }
         let host = String(decoding: bytes, as: UTF8.self)
         return host.isEmpty ? nil : host
     }

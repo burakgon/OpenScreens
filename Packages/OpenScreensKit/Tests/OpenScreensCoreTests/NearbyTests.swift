@@ -80,6 +80,30 @@ import dnssd
         #expect(NearbyComputer.normalizedHost(target) == nil)
     }
 
+    /// Whoever advertises a service chooses the host it points at, and can
+    /// put any byte into it. A NUL ends the name for the system's resolver,
+    /// so what would be shown and saved is not what would be looked up.
+    @Test(arguments: [
+        "studio\\000.evil.example.com.", "studio\\000", "\\000studio.local.",
+        "studio\\010second-line.local.", "studio\\013.local.", "stu\\009dio.local.",
+        "studio\\027[2J.local.", "studio\\031.local.", "studio\\127.local.",
+        "stu\u{0}dio.local.", "stu\tdio.local.", "stu\ndio.local.", "stu\u{1B}dio.local.",
+        "stu\u{7F}dio.local.",
+    ])
+    func hostTargetsWithControlCharactersAreNoHost(target: String) {
+        #expect(NearbyComputer.normalizedHost(target) == nil)
+    }
+
+    @Test func aHostThatIsNoHostLeavesTheComputerUnresolved() throws {
+        var records = NearbyRecords()
+        records.insert(NearbyRecords.ScreenSharingService(
+            name: "Studio", host: NearbyComputer.normalizedHost("studio\\000.evil.example.com."),
+            port: 5900))
+        let studio = try #require(records.computers().first)
+        #expect(studio.name == "Studio")
+        #expect(studio.host == nil)
+    }
+
     @Test(arguments: [
         ("Studio.local", "studio"),
         ("Studio.local.", "studio"),
@@ -523,6 +547,55 @@ import dnssd
         #expect(!Status.isConnectionLoss(DNSServiceErrorType(kDNSServiceErr_NoSuchRecord)))
         #expect(!Status.isConnectionLoss(DNSServiceErrorType(kDNSServiceErr_Timeout)))
         #expect(!Status.isConnectionLoss(DNSServiceErrorType(kDNSServiceErr_PolicyDenied)))
+    }
+
+    // MARK: What has been reported
+
+    @Test func aStatusAndAListAreReportedOnce() {
+        var reports = NearbyReports()
+        func status(_ status: Status) -> NearbyReports.Consequence? { reports.note(status) }
+        func list(_ computers: [NearbyComputer]) -> Bool { reports.note(computers) }
+        let atlas = NearbyComputer(name: "Atlas"), studio = NearbyComputer(name: "Studio")
+
+        #expect(status(.searching) == .listStands)
+        #expect(status(.searching) == nil)
+        // An empty list is what the listener starts with.
+        #expect(!list([]))
+        #expect(list([atlas]))
+        #expect(!list([atlas]))
+        #expect(list([atlas, studio]))
+        #expect(list([]))
+        #expect(status(.failed("broken")) == .listStands)
+        #expect(status(.failed("broken")) == nil)
+        #expect(status(.failed("broken differently")) == .listStands)
+    }
+
+    /// The listener empties its list when it hears that access is denied.
+    /// If browsing then picks up with the very computers it had, the list
+    /// has not changed — and still has to be published, or the listener is
+    /// left with nothing to show.
+    @Test func afterADenialTheSameListIsReportedAgain() {
+        var reports = NearbyReports()
+        func status(_ status: Status) -> NearbyReports.Consequence? { reports.note(status) }
+        func list(_ computers: [NearbyComputer]) -> Bool { reports.note(computers) }
+        let atlas = NearbyComputer(name: "Atlas")
+        #expect(status(.searching) == .listStands)
+        #expect(list([atlas]))
+
+        #expect(status(.denied) == .listStands)
+        #expect(status(.denied) == nil)
+        // Access is granted, and nothing about the network has changed.
+        #expect(status(.searching) == .listIsDueAgain)
+        #expect(list([atlas]))
+        #expect(!list([atlas]))
+
+        // Nothing is published when there is nothing to list.
+        #expect(status(.denied) == .listStands)
+        #expect(status(.searching) == .listIsDueAgain)
+        #expect(!list([]))
+        // A failure after a denial calls for the list as well.
+        #expect(status(.denied) == .listStands)
+        #expect(status(.failed("broken")) == .listIsDueAgain)
     }
 
     @Test func theServiceTypesBrowsedAreTheDocumentedOnes() {

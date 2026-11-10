@@ -56,8 +56,7 @@ actor NearbyEngine {
     private var records = NearbyRecords()
     private var local = NearbyLocalIdentity()
     private var publishIsScheduled = false
-    private var lastPublished: [NearbyComputer] = []
-    private var lastStatus: Status?
+    private var told = NearbyReports()
 
     nonisolated var unownedExecutor: UnownedSerialExecutor {
         queue.asUnownedSerialExecutor()
@@ -377,9 +376,11 @@ actor NearbyEngine {
     // MARK: - Publishing
 
     private func report(_ status: Status) {
-        guard status != lastStatus else { return }
-        lastStatus = status
+        guard let consequence = told.note(status) else { return }
         continuation.yield(.status(status))
+        if consequence == .listIsDueAgain {
+            setNeedsPublish()
+        }
     }
 
     /// Schedules one publication for everything that changes in the next
@@ -396,9 +397,54 @@ actor NearbyEngine {
         publishIsScheduled = false
         guard isRunning else { return }
         let computers = records.computers(excluding: local)
-        guard computers != lastPublished else { return }
-        lastPublished = computers
+        guard told.note(computers) else { return }
         continuation.yield(.computers(computers))
+    }
+}
+
+// MARK: - What has been reported
+
+/// What the engine has told its listener so far, so that it says a thing
+/// once — and says it again when the listener can no longer be assumed to
+/// know it.
+struct NearbyReports {
+    enum Consequence: Equatable {
+        /// What the listener has of the list still stands.
+        case listStands
+        /// The list has to be published again even if it has not changed.
+        case listIsDueAgain
+    }
+
+    private var status: NearbyEngine.Status?
+    private var computers: [NearbyComputer] = []
+
+    /// Notes a status about to be reported.
+    ///
+    /// - Returns: `nil` when it is the status the listener already has;
+    ///   otherwise what reporting it entails.
+    mutating func note(_ status: NearbyEngine.Status) -> Consequence? {
+        guard status != self.status else { return nil }
+        let wasDenied = self.status == .denied
+        self.status = status
+        if status == .denied {
+            // Told that access is denied, the listener empties its list.
+            // What was published before then is no longer what it has.
+            computers = []
+            return .listStands
+        }
+        // Browsing can pick up after a denial with exactly the computers it
+        // had before. The list is unchanged then, and has to be sent anyway.
+        return wasDenied ? .listIsDueAgain : .listStands
+    }
+
+    /// Notes the list as it is now.
+    ///
+    /// - Returns: Whether it differs from what the listener has, and so has
+    ///   to be published.
+    mutating func note(_ computers: [NearbyComputer]) -> Bool {
+        guard computers != self.computers else { return false }
+        self.computers = computers
+        return true
     }
 }
 
