@@ -721,6 +721,9 @@ public actor TransportSession {
     /// User-selected upper bound shared by Apple display selection, HEVC
     /// receiver negotiation, and virtual display configuration.
     private let requestedDisplayCount: Int
+    /// What the remote Mac calls the displays it creates for this session,
+    /// in its Displays settings and wherever else it lists them.
+    private let virtualDisplayName: String
     /// Viewer refresh-rate preference. Apple's media-configuration flags only
     /// advertise the 60-fps receiver capability when this is at least 60;
     /// explicitly configured lower-rate paths leave those bits clear.
@@ -884,6 +887,7 @@ public actor TransportSession {
         targetFrameRate: Int = 60,
         displayCount: Int = 1,
         requestsVirtualDisplays: Bool = false,
+        virtualDisplayName: String = "rootshell Virtual Display",
         appleMediaTilesPerFrameOverride: UInt64? = nil,
         serverRendersCursor: Bool = false,
         connection: (any RFBConnection)? = nil,
@@ -952,6 +956,7 @@ public actor TransportSession {
         self.username = username
         self.certificateValidationHandler = certificateValidationHandler
         self.requestedDisplayCount = min(2, max(1, displayCount))
+        self.virtualDisplayName = virtualDisplayName
         self.requestedFrameRate = max(1, min(120, targetFrameRate))
         self.requestsVirtualDisplays = requestsVirtualDisplays
         self.requestedAppleMediaStream = configuredEncodings.contains(.appleH264)
@@ -3946,7 +3951,7 @@ public actor TransportSession {
     ) async throws {
         let displays = appleVirtualDisplays(
             count: requestedDisplayCount,
-            name: "rootshell Virtual Display",
+            name: virtualDisplayName,
             pixelWidth: requested.pixelWidth,
             pixelHeight: requested.pixelHeight,
             pointWidth: requested.pointWidth,

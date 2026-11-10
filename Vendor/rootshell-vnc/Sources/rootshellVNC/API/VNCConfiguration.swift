@@ -259,6 +259,10 @@ public struct VNCConfiguration: Sendable {
         }
     }
 
+    /// What the remote Mac calls the virtual displays it creates for this
+    /// session. With two displays each name gets its number appended.
+    public var virtualDisplayName: String = "rootshell Virtual Display"
+
     /// Whether remote system audio should play on this device.
     ///
     /// Apple High Performance mode still negotiates its protocol-mandated

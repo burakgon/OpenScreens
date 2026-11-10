@@ -3817,6 +3817,7 @@ public final class VNCSession {
             displayCount: configuration.displayCount,
             requestsVirtualDisplays:
                 configuration.displaySizingMode == .matchClient,
+            virtualDisplayName: configuration.virtualDisplayName,
             appleMediaTilesPerFrameOverride:
                 appleMediaTilesPerFrameOverride,
             serverRendersCursor: cursorRendering == .server,
