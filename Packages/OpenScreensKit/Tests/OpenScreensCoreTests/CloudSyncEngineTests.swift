@@ -1670,6 +1670,35 @@ struct CloudSyncEngineTests {
         #expect(device.lastSync != nil)
     }
 
+    @Test func aDeletionAboutToBeForgottenIsNoLongerCarriedIntoICloud() throws {
+        let (mac, phone) = twoDevicesSharingOneStore()
+        let store = mac.store
+        let old = LibraryFixtures.computer(
+            "Old", modifiedAt: Date.now.addingTimeInterval(-200 * 86_400))
+        phone.library.merge(LibraryDocument(computers: [old]))
+        phone.engine.syncNow()
+        #expect(store.values[key(old)] != nil)
+        store.forgetOperations()
+
+        // The Mac deleted that computer almost ninety days ago and has not
+        // synced since: the deletion has an hour left before it is forgotten.
+        mac.library.merge(LibraryDocument(tombstones: [
+            old.id.uuidString: Date.now.addingTimeInterval(-LibraryDocument.tombstoneLifetime + 3600),
+        ]))
+        mac.engine.syncNow()
+
+        // It still holds here, for that hour. It is too late to hand on:
+        // the record would be gone again before it had done anything, and
+        // the computer taken out of iCloud without it would come straight
+        // back from the phone.
+        #expect(mac.library.computer(old.id) == nil)
+        #expect(store.operations.isEmpty)
+        #expect(store.values[key(old)] != nil)
+        phone.storeChangedExternally()
+        #expect(phone.library.computer(old.id) == old)
+        #expect(mac.lastSync != nil)
+    }
+
     // MARK: - Layout versions
 
     @Test func theLayoutVersionIsRecordedAndBroughtUpToDate() throws {
@@ -1797,6 +1826,18 @@ struct CloudLibraryLayoutTests {
         let store = InMemoryCloudStore()
         for write in try makePlan(document).writes {
             store.set(write.data, forKey: write.key.rawValue)
+        }
+        var reader = CloudReader()
+        return reader.read(store)
+    }
+
+    /// A snapshot of a store that holds a record of the given deletions,
+    /// whatever their age, and nothing else.
+    private func snapshot(holdingDeletions deletions: [UUID: Date]) throws -> CloudSnapshot {
+        let store = InMemoryCloudStore()
+        store.set(try CloudCoding.makeEncoder().encode(CloudMetadata(schemaVersion: 1)), forKey: "meta")
+        for (id, date) in deletions {
+            store.set(try CloudCoding.makeEncoder().encode(date), forKey: "t.\(id.uuidString)")
         }
         var reader = CloudReader()
         return reader.read(store)
@@ -2159,11 +2200,75 @@ struct CloudLibraryLayoutTests {
         let lifetime = LibraryDocument.tombstoneLifetime
         let fresh = UUID(), stale = UUID()
         let plan = try makePlan(LibraryDocument(tombstones: [
-            fresh.uuidString: now.addingTimeInterval(-lifetime + 1),
+            fresh.uuidString: now.addingTimeInterval(-lifetime + 2 * 86_400),
             stale.uuidString: now.addingTimeInterval(-lifetime),
         ]))
 
         #expect(plan.writes.map(\.key) == [.metadata, .tombstone(fresh)])
+    }
+
+    /// Two devices whose clocks differ by a couple of minutes, around the
+    /// moment a deletion has been remembered long enough.
+    @Test func devicesWhoseClocksDisagreeDoNotPassAnExpiringDeletionBackAndForth() throws {
+        let lifetime = LibraryDocument.tombstoneLifetime
+        let deleted = UUID()
+        let deletedAt = now.addingTimeInterval(-lifetime)
+        let ahead = now.addingTimeInterval(60), behind = now.addingTimeInterval(-60)
+        let library = LibraryDocument(tombstones: [deleted.uuidString: deletedAt])
+        let recorded = try snapshot(holdingDeletions: [deleted: deletedAt])
+        #expect(recorded.tombstones[deleted] == deletedAt)
+
+        // The device that is ahead finds the record expired and takes it out.
+        let removing = try CloudSyncPlan(
+            desired: LibraryDocument.merge(library, recorded.document, now: ahead),
+            cloud: recorded, schemaVersion: 1, now: ahead)
+        #expect(removing.removals == [.tombstone(deleted)])
+        #expect(removing.writes.isEmpty)
+
+        // For the one that is behind it has a minute to go. It still holds
+        // the deletion, does not find it in the store — and leaves it at that.
+        let without = try snapshot(holdingDeletions: [:])
+        let wanted = LibraryDocument.merge(library, without.document, now: behind)
+        #expect(wanted.tombstones[deleted.uuidString] == deletedAt)
+        let leaving = try CloudSyncPlan(desired: wanted, cloud: without, schemaVersion: 1, now: behind)
+        #expect(leaving.isEmpty)
+    }
+
+    @Test func aDeletionAboutToBeForgottenIsUploadedOnlyWhereTheStoreAlreadyHasIt() throws {
+        let lifetime = LibraryDocument.tombstoneLifetime
+        let stretch = CloudSyncPlan.finalStretchOfADeletion
+        #expect(stretch >= 3600 && stretch < lifetime / 10)
+        let lapsing = LibraryFixtures.computer("Lapsing", modifiedAt: now.addingTimeInterval(-lifetime * 2))
+        let lasting = LibraryFixtures.computer("Lasting", modifiedAt: now.addingTimeInterval(-lifetime * 2))
+        let home = LibraryFixtures.group("Home", modifiedAt: now.addingTimeInterval(-lifetime * 2))
+        let almostForgotten = now.addingTimeInterval(-lifetime + stretch - 60)
+        let stillRemembered = now.addingTimeInterval(-lifetime + stretch + 60)
+
+        // The store still has what was deleted, and no record of the
+        // deletions: this device made them long ago and is only now back.
+        let cloud = try snapshot(of: LibraryDocument(computers: [lapsing, lasting], groups: [home]))
+        let plan = try makePlan(
+            LibraryDocument(tombstones: [
+                lapsing.id.uuidString: almostForgotten,
+                home.id.uuidString: almostForgotten,
+                lasting.id.uuidString: stillRemembered,
+            ]),
+            against: cloud)
+
+        // The deletion with time left is carried out. The others are past
+        // it, record and removal alike: a computer that vanished from the
+        // store without a record would only be uploaded again by the next
+        // device that has it.
+        #expect(plan.writes.map(\.key) == [.tombstone(lasting.id)])
+        #expect(plan.removals == [.computer(lasting.id)])
+
+        // Where the store has the record already, it is kept up to date to
+        // the end.
+        let known = try snapshot(holdingDeletions: [lapsing.id: almostForgotten.addingTimeInterval(-30)])
+        let redating = try makePlan(
+            LibraryDocument(tombstones: [lapsing.id.uuidString: almostForgotten]), against: known)
+        #expect(redating.writes.map(\.key) == [.tombstone(lapsing.id)])
+        #expect(redating.removals.isEmpty)
     }
 
     @Test func theFirstLimitThatWouldBeBrokenIsReported() throws {

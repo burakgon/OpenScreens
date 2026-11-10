@@ -384,6 +384,26 @@ struct CloudSyncPlan: Sendable {
                   now.timeIntervalSince(date) < LibraryDocument.tombstoneLifetime else { continue }
             tombstones[id] = max(tombstones[id] ?? date, date)
         }
+
+        // A deletion the store has no record of and that is about to be
+        // forgotten is past uploading. Devices do not agree on the time to
+        // the second: the one whose clock is ahead takes an expired record
+        // out of the store while one that is behind still holds it and, not
+        // finding it there, would put it back — over and over until its own
+        // clock catches up. Nor is such a deletion acted on in the store
+        // any more: removing the item without leaving the record would only
+        // make a device that still has the item upload it again.
+        var lapsing: Set<UUID> = []
+        for (id, date) in tombstones where cloud.tombstones[id] == nil {
+            let remaining = LibraryDocument.tombstoneLifetime - now.timeIntervalSince(date)
+            if remaining <= Self.finalStretchOfADeletion {
+                lapsing.insert(id)
+            }
+        }
+        for id in lapsing {
+            tombstones[id] = nil
+        }
+
         for (id, date) in tombstones.sorted(by: { $0.key.uuidString < $1.key.uuidString }) {
             if let existing = cloud.tombstones[id], existing >= date { continue }
             try stage(date, at: .tombstone(id))
@@ -405,12 +425,12 @@ struct CloudSyncPlan: Sendable {
             case .metadata:
                 break
             case .computer(let id):
-                if !liveComputers.contains(id),
+                if !liveComputers.contains(id), !lapsing.contains(id),
                    cloud.computers[id] != nil || tombstones[id] != nil {
                     removals.append(key)
                 }
             case .group(let id):
-                if !liveGroups.contains(id),
+                if !liveGroups.contains(id), !lapsing.contains(id),
                    cloud.groups[id] != nil || tombstones[id] != nil {
                     removals.append(key)
                 }
@@ -451,6 +471,11 @@ struct CloudSyncPlan: Sendable {
         self.existingKeyCount = cloud.sizes.count
         self.deletionsThatCanWait = deletionsThatCanWait
     }
+
+    /// How close to being forgotten a deletion may be and still be uploaded
+    /// to a store that has no record of it. A day is far more than the
+    /// clocks of one person's devices differ by.
+    static let finalStretchOfADeletion: TimeInterval = 24 * 60 * 60
 
     /// The first limit the plan would break, if any.
     ///
