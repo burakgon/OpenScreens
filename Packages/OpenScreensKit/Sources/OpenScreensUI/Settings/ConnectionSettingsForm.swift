@@ -21,6 +21,7 @@ struct ConnectionSettingsForm: View {
             soundSection
         }
         controlSection
+        keyboardSection
         privacySection
         reliabilitySection
     }
@@ -132,9 +133,16 @@ struct ConnectionSettingsForm: View {
                 Slider(value: $settings.scrollSpeed, in: 0.25...3, step: 0.25)
             }
 
-            Picker("Keyboard", selection: $settings.keyboardInput) {
-                ForEach(KeyboardInputMode.allCases) { mode in
-                    Text(mode.title).tag(mode)
+        } header: {
+            Text("Control")
+        }
+    }
+
+    private var keyboardSection: some View {
+        Section {
+            Picker("Typing", selection: keyboardInput) {
+                ForEach(KeyboardInputMode.choices(for: kind)) { mode in
+                    Text(mode.title(for: kind)).tag(mode)
                 }
             }
 
@@ -144,13 +152,25 @@ struct ConnectionSettingsForm: View {
                 Toggle("Use ⌘ as Control", isOn: $settings.swapCommandAndControl)
             }
         } header: {
-            Text("Control")
+            Text("Keyboard")
         } footer: {
-            Text(controlFooter)
+            Text(keyboardInput.wrappedValue.explanation(for: kind) + " " + shortcutsFooter)
         }
     }
 
-    private var controlFooter: String {
+    /// The typing mode, shown as one of the choices this kind of computer
+    /// has: a setting carried over from another kind falls back to Automatic.
+    private var keyboardInput: Binding<KeyboardInputMode> {
+        Binding {
+            KeyboardInputMode.choices(for: kind).contains(settings.keyboardInput)
+                ? settings.keyboardInput
+                : .automatic
+        } set: {
+            settings.keyboardInput = $0
+        }
+    }
+
+    private var shortcutsFooter: String {
         kind.isApple
             ? "With system shortcuts on, combinations such as ⌘Q and ⌘W act on the remote Mac while the pointer is over its screen."
             : "With ⌘ as Control, familiar shortcuts such as ⌘C and ⌘V work as Ctrl+C and Ctrl+V on the remote computer."

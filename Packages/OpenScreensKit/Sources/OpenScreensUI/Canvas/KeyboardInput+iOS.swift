@@ -69,17 +69,9 @@ extension RemoteCanvasView: UIKeyInput, UITextInputTraits {
 
     public func insertText(_ text: String) {
         guard session.canSendInput else { return }
-        for character in text {
-            if character == "\n" {
-                session.tap(.special(.returnKey))
-            } else if character == "\t" {
-                session.tap(.special(.tab))
-            } else {
-                // Modifiers latched from the key bar wrap the next character,
-                // which is what turns "c" into ⌘C.
-                session.tap(keysym: Keysym.character(character))
-            }
-        }
+        // Modifiers latched from the key bar wrap the next character, which
+        // is what turns "c" into ⌘C.
+        session.type(text)
     }
 
     public func deleteBackward() {
@@ -133,16 +125,20 @@ extension RemoteCanvasView: UIKeyInput, UITextInputTraits {
                 unhandled.insert(press)
                 continue
             }
-            let keysym = keysym(for: key)
-            guard keysym != 0 else {
+            let usage = key.keyCode
+            if let modifier = ModifierKey(hidUsage: usage.rawValue) {
+                pressedKeys.insert(usage)
+                session.hardwareModifier(modifier, down: true)
+            } else if usage == .keyboardCapsLock {
+                // Reported as a press; the flags say which state it left
+                // Caps Lock in.
+                session.hardwareCapsLock(isOn: key.modifierFlags.contains(.alphaShift))
+            } else if let stroke = stroke(for: key) {
+                pressedKeys.insert(usage)
+                session.hardwareKeyDown(stroke)
+            } else {
                 unhandled.insert(press)
-                continue
             }
-            if let previous = pressedKeys[key.keyCode], previous != keysym {
-                session.hardwareKey(previous, down: false)
-            }
-            pressedKeys[key.keyCode] = keysym
-            session.hardwareKey(keysym, down: true)
         }
         if !unhandled.isEmpty {
             super.pressesBegan(unhandled, with: event)
@@ -164,10 +160,14 @@ extension RemoteCanvasView: UIKeyInput, UITextInputTraits {
     ) {
         var unhandled = Set<UIPress>()
         for press in presses {
-            if let key = press.key, let keysym = pressedKeys.removeValue(forKey: key.keyCode) {
-                session.hardwareKey(keysym, down: false)
-            } else {
+            guard let usage = press.key?.keyCode, pressedKeys.remove(usage) != nil else {
                 unhandled.insert(press)
+                continue
+            }
+            if let modifier = ModifierKey(hidUsage: usage.rawValue) {
+                session.hardwareModifier(modifier, down: false)
+            } else {
+                session.hardwareKeyUp(key: usage.rawValue)
             }
         }
         if !unhandled.isEmpty {
@@ -175,28 +175,39 @@ extension RemoteCanvasView: UIKeyInput, UITextInputTraits {
         }
     }
 
-    /// The keysym a key press should send.
-    ///
-    /// Modifier keys travel as their own events, so a character key sends its
-    /// own character — with Shift applied, but without Option's alternate
-    /// glyphs or Control's control codes — and the remote computer combines
-    /// the two, as it would for a keyboard plugged into it.
-    private func keysym(for key: UIKey) -> UInt32 {
-        if let special = KeyCodes.keysym(forHIDUsage: key.keyCode.rawValue) {
-            return special
+    /// Describes a key press by what it types on the keyboard's layout.
+    private func stroke(for key: UIKey) -> KeyStroke? {
+        let usage = key.keyCode.rawValue
+        let keyCode = KeyCodes.macKeyCode(forHIDUsage: usage)
+        if let special = KeyCodes.keysym(forHIDUsage: usage) {
+            return KeyStroke(key: usage, macKeyCode: keyCode, special: special)
         }
-        let modified = key.modifierFlags.intersection([.command, .control, .alternate])
-        let wantsComposedText = session.settings.keyboardInput == .unicode
-            && modified.subtracting(.alternate).isEmpty
-        let text = modified.isEmpty || wantsComposedText ? key.characters : key.charactersIgnoringModifiers
-        guard let character = (text.isEmpty ? key.charactersIgnoringModifiers : text).first else { return 0 }
-        return Keysym.character(character)
+        let plain = Self.typedText(key.charactersIgnoringModifiers)
+        let composed = Self.typedText(key.characters)
+        guard !plain.isEmpty || !composed.isEmpty else { return nil }
+        // With Control held the system reports a control code, and a dead
+        // key reports nothing it types by itself; both fall back to the
+        // key's own character.
+        let isShortcut = !key.modifierFlags.intersection([.command, .control]).isEmpty
+        return KeyStroke(
+            key: usage,
+            macKeyCode: keyCode,
+            text: isShortcut || composed.isEmpty ? plain : composed,
+            textWithoutOption: plain.isEmpty ? composed : plain,
+            shortcutText: plain.lowercased())
+    }
+
+    /// The text a key reports, without the placeholders UIKit uses for keys
+    /// that type nothing.
+    private static func typedText(_ text: String) -> String {
+        guard let first = text.unicodeScalars.first,
+              first.value >= 0x20, first.value != 0x7F,
+              !text.hasPrefix("UIKeyInput"), text != "Dead" else { return "" }
+        return text
     }
 
     func releaseAllKeys() {
-        for (_, keysym) in pressedKeys {
-            session.hardwareKey(keysym, down: false)
-        }
+        session.releaseHardwareKeys()
         pressedKeys.removeAll()
     }
 }

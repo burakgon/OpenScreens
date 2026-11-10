@@ -435,6 +435,10 @@ public final class RemoteSession: Identifiable {
     /// - Parameter point: Position on the shown screen, in remote pixels.
     public func pointer(buttons: PointerButtons, at point: CGPoint) {
         guard canSendInput else { return }
+        if !buttons.isEmpty, pointerButtonsDown.isEmpty {
+            emit(keyboard.pointerButtonWillPress())
+        }
+        pointerButtonsDown = buttons
         let wire = wirePoint(point)
         engine.sendPointerEvent(buttonMask: buttons.rawValue, x: wire.x, y: wire.y)
     }
@@ -496,22 +500,92 @@ public final class RemoteSession: Identifiable {
     }
 
     @ObservationIgnored private var scrollRemainder = FractionAccumulator()
+    @ObservationIgnored private var pointerButtonsDown: PointerButtons = []
 
     // MARK: - Keyboard
 
-    /// Sends a raw key transition.
-    public func key(_ keysym: UInt32, down: Bool) {
-        guard canSendInput, keysym != 0 else { return }
-        engine.sendKeyEvent(downFlag: down, key: keysym)
+    /// What a physical keyboard is doing, turned into key events for the
+    /// remote computer.
+    @ObservationIgnored private var keyboard = HardwareKeyboard(
+        configuration: HardwareKeyboard.Configuration(remoteIsMac: false, convention: .standard))
+
+    /// Whether the remote computer is a Mac running Apple's server, which
+    /// types the character it is asked for whatever modifiers are held.
+    private var remoteIsMac: Bool {
+        engine.serverUsesAppleModifierConvention
     }
 
-    /// Sends a key transition coming from a physical keyboard, translating
-    /// modifiers for the remote system.
-    public func hardwareKey(_ keysym: UInt32, down: Bool) {
-        let translated = Keysym.isModifier(keysym)
-            ? modifierConvention.translate(modifierKeysym: keysym)
-            : keysym
-        key(translated, down: down)
+    /// How modifiers are named when a key is named for the remote system — a
+    /// toolbar shortcut, the key bar — rather than pressed on a keyboard.
+    /// Those say exactly which remote modifier they mean, so ⌘ and ⌃ are
+    /// never swapped here.
+    private var literalModifierConvention: ModifierConvention {
+        remoteIsMac ? .apple : .standard
+    }
+
+    private func emit(_ transitions: [KeyTransition]) {
+        for transition in transitions {
+            if let keyCode = transition.keyCode {
+                engine.sendKeyEvent(
+                    downFlag: transition.isDown, key: transition.keysym, keyCode: keyCode)
+            } else if transition.keysym != 0 {
+                engine.sendKeyEvent(downFlag: transition.isDown, key: transition.keysym)
+            }
+        }
+    }
+
+    /// Brings the keyboard up to date with the connection and its settings.
+    /// Returns false, having let go of everything, when input is not allowed.
+    private func prepareKeyboard() -> Bool {
+        guard canSendInput else {
+            _ = keyboard.releaseAll()
+            return false
+        }
+        let configuration = HardwareKeyboard.Configuration(
+            remoteIsMac: remoteIsMac,
+            takesKeyCodes: engine.serverTakesKeyCodes,
+            mode: settings.keyboardInput,
+            convention: modifierConvention)
+        if keyboard.configuration != configuration {
+            emit(keyboard.releaseAll())
+            keyboard.configuration = configuration
+        }
+        return true
+    }
+
+    /// A modifier key on a physical keyboard went down or up.
+    public func hardwareModifier(_ key: ModifierKey, down: Bool) {
+        guard prepareKeyboard() else { return }
+        emit(keyboard.modifierChanged(key, isDown: down))
+    }
+
+    /// A key on a physical keyboard went down, or is repeating.
+    public func hardwareKeyDown(_ stroke: KeyStroke) {
+        guard prepareKeyboard() else { return }
+        emit(keyboard.keyDown(stroke))
+    }
+
+    /// The key that `hardwareKeyDown` reported was released.
+    public func hardwareKeyUp(key: Int) {
+        guard prepareKeyboard() else { return }
+        emit(keyboard.keyUp(key: key))
+    }
+
+    /// Caps Lock on a physical keyboard turned on or off.
+    public func hardwareCapsLock(isOn: Bool) {
+        guard prepareKeyboard() else { return }
+        emit(keyboard.capsLockChanged(isOn: isOn))
+    }
+
+    /// Lets go of the keys held on a physical keyboard, so nothing stays
+    /// stuck when the keyboard stops being ours. Modifiers are kept when the
+    /// keyboard is still in use and only the keys need releasing.
+    public func releaseHardwareKeys(includingModifiers: Bool = true) {
+        guard isConnected else {
+            _ = keyboard.releaseAll()
+            return
+        }
+        emit(includingModifiers ? keyboard.releaseAll() : keyboard.releaseKeys())
     }
 
     /// Presses and releases a key, wrapped in the given and latched modifiers.
@@ -521,16 +595,9 @@ public final class RemoteSession: Identifiable {
 
     public func tap(keysym: UInt32, modifiers: KeyModifiers = []) {
         guard canSendInput, keysym != 0 else { return }
-        let all = modifiers.union(latchedModifiers)
-        let modifierKeys = modifierConvention.keysyms(for: all)
-        for modifier in modifierKeys {
-            engine.sendKeyEvent(downFlag: true, key: modifier)
-        }
-        engine.sendKeyEvent(downFlag: true, key: keysym)
-        engine.sendKeyEvent(downFlag: false, key: keysym)
-        for modifier in modifierKeys.reversed() {
-            engine.sendKeyEvent(downFlag: false, key: modifier)
-        }
+        let combination = combination(keysym: keysym, modifiers: modifiers.union(latchedModifiers))
+        emit(combination.press)
+        emit(combination.release)
         consumeLatchedModifiers()
     }
 
@@ -540,30 +607,35 @@ public final class RemoteSession: Identifiable {
         guard canSendInput else { return }
         let keysym = shortcut.key.keysym
         guard keysym != 0 else { return }
-        let modifierKeys = modifierConvention.keysyms(for: shortcut.modifiers)
-        for modifier in modifierKeys {
-            engine.sendKeyEvent(downFlag: true, key: modifier)
-        }
-        engine.sendKeyEvent(downFlag: true, key: keysym)
-        let engine = engine
-        Task {
+        let combination = combination(keysym: keysym, modifiers: shortcut.modifiers)
+        emit(combination.press)
+        Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(75))
-            engine.sendKeyEvent(downFlag: false, key: keysym)
-            for modifier in modifierKeys.reversed() {
-                engine.sendKeyEvent(downFlag: false, key: modifier)
-            }
+            self?.emit(combination.release)
         }
+    }
+
+    private func combination(
+        keysym: UInt32, modifiers: KeyModifiers
+    ) -> (press: [KeyTransition], release: [KeyTransition]) {
+        SyntheticKeys.combination(
+            keysym: keysym,
+            modifiers: modifiers,
+            remoteIsMac: remoteIsMac,
+            takesKeyCodes: engine.serverTakesKeyCodes,
+            convention: literalModifierConvention)
     }
 
     /// Types text as a sequence of characters.
     public func type(_ text: String) {
         guard canSendInput else { return }
-        for character in text {
-            let keysym = Keysym.character(character)
-            guard keysym != 0 else { continue }
+        let text = text.replacingOccurrences(of: "\r\n", with: "\n")
+        for keysym in Keysym.keysyms(for: text) {
             if latchedModifiers.isEmpty {
-                engine.sendKeyEvent(downFlag: true, key: keysym)
-                engine.sendKeyEvent(downFlag: false, key: keysym)
+                emit([
+                    KeyTransition(keysym: keysym, isDown: true),
+                    KeyTransition(keysym: keysym, isDown: false),
+                ])
             } else {
                 tap(keysym: keysym)
             }

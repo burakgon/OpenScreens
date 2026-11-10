@@ -128,22 +128,82 @@ struct SessionEndToEndTests {
 
         session.type("Hi!")
         session.tap(.special(.returnKey))
-        // On a computer that is not a Mac, ⌘C is sent as Control-C.
-        session.send(RemoteShortcut(name: "Copy", modifiers: [.command], key: .character("c")))
+        // A shortcut names the remote computer's own modifiers: on a PC,
+        // Control-Alt-Delete is exactly those keys.
+        session.send(RemoteShortcut(
+            name: "Task Manager", modifiers: [.control, .option], key: .special(.forwardDelete)))
 
         let finished = await server.waitForEvents { events in
             events.contains(.key(keysym: Keysym.controlLeft, isDown: false))
         }
         #expect(finished)
-        let keys = server.events.compactMap { event -> String? in
+        #expect(keys(from: server) == [
+            "+48", "-48", "+69", "-69", "+21", "-21",   // H i !
+            "+ff0d", "-ff0d",                           // Return
+            "+ffe3", "+ffe9", "+ffff", "-ffff", "-ffe9", "-ffe3",
+        ])
+    }
+
+    @Test func aMacKeyboardDrivesAPC() async throws {
+        let (session, server, model) = try await makeSession()
+        defer {
+            model.sessions.close(session)
+            server.stop()
+        }
+        session.start()
+        #expect(await waitUntil { session.phase == .connected })
+
+        // ⌘C is Control-C on a PC, unless the user turns the swap off.
+        session.hardwareModifier(.leftCommand, down: true)
+        session.hardwareKeyDown(KeyStroke(key: 8, text: "c", textWithoutOption: "c", shortcutText: "c"))
+        session.hardwareKeyUp(key: 8)
+        session.hardwareModifier(.leftCommand, down: false)
+
+        // Option-Q types @ on a Turkish keyboard. Alt stays out of it.
+        session.hardwareModifier(.leftOption, down: true)
+        session.hardwareKeyDown(KeyStroke(key: 12, text: "@", textWithoutOption: "q", shortcutText: "q"))
+        session.hardwareKeyUp(key: 12)
+        session.hardwareModifier(.leftOption, down: false)
+
+        // Option held for a click is Alt.
+        session.hardwareModifier(.leftOption, down: true)
+        session.click(.left, at: CGPoint(x: 10, y: 10))
+        session.hardwareModifier(.leftOption, down: false)
+
+        #expect(await server.waitForEvents { $0.contains(.key(keysym: Keysym.altLeft, isDown: false)) })
+        #expect(keys(from: server) == [
+            "+ffe3", "+63", "-63", "-ffe3",
+            "+40", "-40",
+            "+ffe9", "-ffe9",
+        ])
+        let altDown = try #require(server.events.firstIndex(of: .key(keysym: Keysym.altLeft, isDown: true)))
+        let press = try #require(server.events.firstIndex(of: .pointer(x: 10, y: 10, buttons: 0x01)))
+        #expect(altDown < press)
+    }
+
+    @Test func keysHeldWhenTheKeyboardIsLostAreReleased() async throws {
+        let (session, server, model) = try await makeSession()
+        defer {
+            model.sessions.close(session)
+            server.stop()
+        }
+        session.start()
+        #expect(await waitUntil { session.phase == .connected })
+
+        session.hardwareModifier(.leftShift, down: true)
+        session.hardwareKeyDown(KeyStroke(key: 0, text: "A", textWithoutOption: "A", shortcutText: "a"))
+        session.releaseHardwareKeys()
+
+        #expect(await server.waitForEvents { $0.contains(.key(keysym: Keysym.shiftLeft, isDown: false)) })
+        #expect(keys(from: server) == ["+ffe1", "+41", "-41", "-ffe1"])
+    }
+
+    /// The key events a server received, as `+keysym` and `-keysym`.
+    private func keys(from server: RFBTestServer) -> [String] {
+        server.events.compactMap { event -> String? in
             guard case .key(let keysym, let isDown) = event else { return nil }
             return "\(isDown ? "+" : "-")\(String(keysym, radix: 16))"
         }
-        #expect(keys == [
-            "+48", "-48", "+69", "-69", "+21", "-21",   // H i !
-            "+ff0d", "-ff0d",                           // Return
-            "+ffe3", "+63", "-63", "-ffe3",             // Control down, c, Control up
-        ])
     }
 
     @Test func latchedModifiersWrapTheNextKeyOnly() async throws {
@@ -160,11 +220,8 @@ struct SessionEndToEndTests {
         session.tap(keysym: Keysym.character("b"))
 
         #expect(await server.waitForEvents { $0.contains(.key(keysym: 0x62, isDown: false)) })
-        let keys = server.events.compactMap { event -> String? in
-            guard case .key(let keysym, let isDown) = event else { return nil }
-            return "\(isDown ? "+" : "-")\(String(keysym, radix: 16))"
-        }
-        #expect(keys == ["+ffe1", "+61", "-61", "-ffe1", "+62", "-62"])
+        // Shift with a letter is the capital letter.
+        #expect(keys(from: server) == ["+ffe1", "+41", "-41", "-ffe1", "+62", "-62"])
         #expect(session.latchedModifiers.isEmpty)
     }
 

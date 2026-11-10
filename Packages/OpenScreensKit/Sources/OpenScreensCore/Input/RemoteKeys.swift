@@ -137,6 +137,21 @@ public enum Keysym {
     /// X11 Unicode range. Returns 0 for characters that cannot be typed.
     public static func character(_ character: Character) -> UInt32 {
         guard let scalar = character.unicodeScalars.first else { return 0 }
+        return Self.scalar(scalar)
+    }
+
+    /// The keysyms that type a piece of text, one for each Unicode scalar.
+    ///
+    /// The text is composed first, so a letter and its accent become the one
+    /// key press that types the accented letter.
+    public static func keysyms(for text: String) -> [UInt32] {
+        text.precomposedStringWithCanonicalMapping.unicodeScalars
+            .map { scalar($0) }
+            .filter { $0 != 0 }
+    }
+
+    /// The keysym that types a Unicode scalar, or 0 when there is none.
+    public static func scalar(_ scalar: Unicode.Scalar) -> UInt32 {
         let value = scalar.value
         switch value {
         case 0x20...0x7E, 0xA0...0xFF: return value

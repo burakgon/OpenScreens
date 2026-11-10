@@ -56,7 +56,8 @@ public final class RemoteCanvasView: UIView {
 
     // MARK: Keyboard state (shared with the keyboard extension)
 
-    var pressedKeys: [UIKeyboardHIDUsage: UInt32] = [:]
+    /// Hardware keys that are down and were sent to the remote computer.
+    var pressedKeys: Set<UIKeyboardHIDUsage> = []
     var showsSoftwareKeyboard = false
     let emptyInputView = UIView(frame: .zero)
     var keyboardAccessory: UIView?

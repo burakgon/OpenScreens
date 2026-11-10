@@ -360,24 +360,47 @@ public enum TouchInputMode: String, Codable, CaseIterable, Identifiable, Sendabl
     }
 }
 
-/// How typed text reaches the remote computer.
+/// How keys pressed on a physical keyboard are sent.
 public enum KeyboardInputMode: String, Codable, CaseIterable, Identifiable, Sendable {
-    /// Physical keys for Macs, characters for everything else.
+    /// Send what the local keyboard types, so the two keyboard layouts do
+    /// not have to match. On a computer that is not a Mac, Option works as
+    /// Alt unless the local layout needs it to type a symbol.
     case automatic
-    /// Send the physical key that was pressed and let the remote keyboard
-    /// layout decide what it means. Best when both sides use the same layout.
+    /// Send keys rather than characters. A Mac is told which key was pressed
+    /// and its own keyboard layout decides what that types, as with Apple's
+    /// Screen Sharing; anywhere else Option is always Alt.
     case keystrokes
-    /// Send the character that was typed. Best for non-Latin text and when
-    /// the two keyboard layouts differ.
+    /// Always send the character Option produces, never Alt. Only differs
+    /// from `automatic` on computers that are not Macs.
     case unicode
 
     public var id: Self { self }
 
-    public var title: String {
+    /// The modes that behave differently on a kind of computer.
+    public static func choices(for kind: ComputerKind) -> [KeyboardInputMode] {
+        kind.isApple ? [.automatic, .keystrokes] : [.automatic, .keystrokes, .unicode]
+    }
+
+    public func title(for kind: ComputerKind) -> String {
         switch self {
         case .automatic: "Automatic"
-        case .keystrokes: "Keystrokes"
-        case .unicode: "Unicode"
+        case .keystrokes: kind.isApple ? "Key Positions" : "Option Is Alt"
+        case .unicode: "Option Types Characters"
+        }
+    }
+
+    public func explanation(for kind: ComputerKind) -> String {
+        switch (self, kind.isApple) {
+        case (.keystrokes, true):
+            "Sends which key you pressed, as Apple\u{2019}s Screen Sharing does, and the remote Mac\u{2019}s keyboard layout decides what it types."
+        case (_, true):
+            "Types what your keyboard types, whichever keyboard layout the remote Mac uses."
+        case (.automatic, false):
+            "Option works as Alt, except where your keyboard layout needs it to type a symbol such as @ or {."
+        case (.keystrokes, false):
+            "Option always works as Alt."
+        case (.unicode, false):
+            "Option always types the character your keyboard layout gives it, and never works as Alt."
         }
     }
 

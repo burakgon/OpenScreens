@@ -42,10 +42,9 @@ public final class RemoteCanvasView: NSView {
     private var edgePanTimer: Timer?
     private var edgePanVelocity = CGSize.zero
 
-    // Keyboard: what was sent on key-down, so key-up always releases the same
-    // keysym even if modifiers changed in between.
-    private var pressedKeys: [UInt16: UInt32] = [:]
-    private var pressedModifiers: [UInt16: UInt32] = [:]
+    // Keyboard
+    private let keyboardLayout = KeyboardLayoutTranslator()
+    private var pressedModifiers: Set<ModifierKey> = []
 
     public init(session: RemoteSession) {
         self.session = session
@@ -519,76 +518,68 @@ public final class RemoteCanvasView: NSView {
 
     public override func keyDown(with event: NSEvent) {
         guard session.canSendInput else { return }
-        let keysym = keysym(for: event)
-        guard keysym != 0 else { return }
-        if let previous = pressedKeys[event.keyCode], previous != keysym {
-            session.hardwareKey(previous, down: false)
+        session.hardwareKeyDown(stroke(for: event))
+        if event.modifierFlags.contains(.command) {
+            // AppKit never delivers the key-up of a key pressed with Command
+            // held, so the key is let go at once rather than left down.
+            session.hardwareKeyUp(key: Int(event.keyCode))
         }
-        pressedKeys[event.keyCode] = keysym
-        session.hardwareKey(keysym, down: true)
     }
 
     public override func keyUp(with event: NSEvent) {
-        guard let keysym = pressedKeys.removeValue(forKey: event.keyCode) else { return }
-        session.hardwareKey(keysym, down: false)
+        session.hardwareKeyUp(key: Int(event.keyCode))
     }
 
     public override func flagsChanged(with event: NSEvent) {
-        guard session.canSendInput,
-              let keysym = KeyCodes.modifierKeysym(forMacKeyCode: event.keyCode) else { return }
-
-        if keysym == Keysym.capsLock {
-            // Caps Lock reports state changes, not presses: send a full tap.
-            session.hardwareKey(keysym, down: true)
-            session.hardwareKey(keysym, down: false)
+        guard session.canSendInput else { return }
+        if event.keyCode == 57 {
+            session.hardwareCapsLock(isOn: event.modifierFlags.contains(.capsLock))
             return
         }
+        guard let key = ModifierKey(macKeyCode: event.keyCode) else { return }
 
-        let flag: NSEvent.ModifierFlags = switch keysym {
-        case Keysym.shiftLeft, Keysym.shiftRight: .shift
-        case Keysym.controlLeft, Keysym.controlRight: .control
-        case Keysym.altLeft, Keysym.altRight: .option
+        let flag: NSEvent.ModifierFlags = switch key.modifier {
+        case .shift: .shift
+        case .control: .control
+        case .option: .option
         default: .command
         }
-        let isDown = event.modifierFlags.contains(flag) && pressedModifiers[event.keyCode] == nil
-        if isDown {
-            pressedModifiers[event.keyCode] = keysym
-            session.hardwareKey(keysym, down: true)
-        } else if let pressed = pressedModifiers.removeValue(forKey: event.keyCode) {
-            session.hardwareKey(pressed, down: false)
+        // The event names the key that changed; the flag says whether any
+        // key of its kind is still down, which tells a press from a release.
+        if event.modifierFlags.contains(flag), !pressedModifiers.contains(key) {
+            pressedModifiers.insert(key)
+            session.hardwareModifier(key, down: true)
+        } else if pressedModifiers.remove(key) != nil {
+            session.hardwareModifier(key, down: false)
         }
     }
 
-    /// The keysym a key press should send.
-    ///
-    /// Modifier keys travel as their own key events, so the character sent
-    /// here is the key's own — with Shift and Caps Lock applied, but without
-    /// Option's alternate characters or Control's control codes. The remote
-    /// computer combines the two, exactly as it would for a local keyboard.
-    private func keysym(for event: NSEvent) -> UInt32 {
+    /// Describes a key press by what it types on the local keyboard layout.
+    private func stroke(for event: NSEvent) -> KeyStroke {
         if let special = KeyCodes.keysym(forMacKeyCode: event.keyCode) {
-            return special
+            keyboardLayout.reset()
+            return KeyStroke(key: Int(event.keyCode), macKeyCode: event.keyCode, special: special)
         }
-        let wantsComposedText = session.settings.keyboardInput == .unicode
-            && event.modifierFlags.intersection([.command, .control]).isEmpty
-        let characters = wantsComposedText
-            ? event.characters
-            : event.characters(byApplyingModifiers: event.modifierFlags.intersection([.shift, .capsLock]))
-        guard let character = (characters ?? event.charactersIgnoringModifiers)?.first else { return 0 }
-        return Keysym.character(character)
+        if let stroke = keyboardLayout.stroke(for: event) {
+            return stroke
+        }
+        // No key layout to ask: go by what the event reports.
+        let plain = event.characters(
+            byApplyingModifiers: event.modifierFlags.intersection([.shift, .capsLock])) ?? ""
+        return KeyStroke(
+            key: Int(event.keyCode),
+            macKeyCode: event.keyCode,
+            text: event.characters ?? plain,
+            textWithoutOption: plain,
+            shortcutText: event.charactersIgnoringModifiers?.lowercased() ?? plain)
     }
 
     /// Releases everything that is held down. Called whenever the view stops
     /// receiving events, so a key or button can never be left stuck.
     private func releaseAllInput() {
-        for (_, keysym) in pressedKeys {
-            session.hardwareKey(keysym, down: false)
-        }
-        pressedKeys.removeAll()
-        for (_, keysym) in pressedModifiers {
-            session.hardwareKey(keysym, down: false)
-        }
+        session.releaseHardwareKeys()
         pressedModifiers.removeAll()
+        keyboardLayout.reset()
         if !buttons.isEmpty, let point = lastRemotePoint {
             buttons = []
             session.pointer(buttons: [], at: point)
