@@ -193,10 +193,20 @@ struct ComputerEditor: View {
         }
     }
 
+    /// The computer's group, shown as "None" when it names a group that is
+    /// not in the library. The reference itself is only changed by choosing.
+    private var groupSelection: Binding<UUID?> {
+        Binding {
+            model.library.group(of: draft)?.id
+        } set: {
+            draft.groupID = $0
+        }
+    }
+
     private var organizeSection: some View {
         Section("Organize") {
             Toggle("Favorite", isOn: $draft.isFavorite)
-            Picker("Group", selection: $draft.groupID) {
+            Picker("Group", selection: groupSelection) {
                 Text("None").tag(UUID?.none)
                 ForEach(model.library.groups) { group in
                     Text(group.name).tag(UUID?.some(group.id))

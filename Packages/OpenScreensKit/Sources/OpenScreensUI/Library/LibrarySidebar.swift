@@ -147,16 +147,19 @@ struct ComputerMenu: View {
 
         if !model.library.groups.isEmpty {
             Menu("Move to Group", systemImage: "folder") {
+                // A computer can name a group that is not here; it is then
+                // in none.
+                let current = model.library.group(of: computer)?.id
                 Button("None") {
                     model.library.update(computer.id) { $0.groupID = nil }
                 }
-                .disabled(computer.groupID == nil)
+                .disabled(current == nil)
                 Divider()
                 ForEach(model.library.groups) { group in
                     Button(group.name, systemImage: group.symbolName) {
                         model.library.update(computer.id) { $0.groupID = group.id }
                     }
-                    .disabled(computer.groupID == group.id)
+                    .disabled(current == group.id)
                 }
             }
         }

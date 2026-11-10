@@ -185,6 +185,51 @@ public enum ComputerOrigin: Codable, Hashable, Sendable {
     case tailscale(nodeID: String)
 
     public var isDiscovered: Bool { self != .manual }
+
+    private enum CodingKeys: String, CodingKey {
+        case manual, bonjour, tailscale
+    }
+
+    private enum BonjourKeys: String, CodingKey {
+        case serviceName
+    }
+
+    private enum TailscaleKeys: String, CodingKey {
+        case nodeID
+    }
+
+    /// Reads an origin, taking anything it does not recognise as `manual`.
+    /// A newer version may know sources this one does not; that must not
+    /// make the computer, and with it the whole library, unreadable.
+    public init(from decoder: any Decoder) throws {
+        guard let container = try? decoder.container(keyedBy: CodingKeys.self) else {
+            self = .manual
+            return
+        }
+        if let bonjour = try? container.nestedContainer(keyedBy: BonjourKeys.self, forKey: .bonjour),
+           let serviceName = try? bonjour.decode(String.self, forKey: .serviceName) {
+            self = .bonjour(serviceName: serviceName)
+        } else if let tailscale = try? container.nestedContainer(keyedBy: TailscaleKeys.self, forKey: .tailscale),
+                  let nodeID = try? tailscale.decode(String.self, forKey: .nodeID) {
+            self = .tailscale(nodeID: nodeID)
+        } else {
+            self = .manual
+        }
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .manual:
+            _ = container.nestedContainer(keyedBy: BonjourKeys.self, forKey: .manual)
+        case .bonjour(let serviceName):
+            var nested = container.nestedContainer(keyedBy: BonjourKeys.self, forKey: .bonjour)
+            try nested.encode(serviceName, forKey: .serviceName)
+        case .tailscale(let nodeID):
+            var nested = container.nestedContainer(keyedBy: TailscaleKeys.self, forKey: .tailscale)
+            try nested.encode(nodeID, forKey: .nodeID)
+        }
+    }
 }
 
 /// A user-defined collection of computers.

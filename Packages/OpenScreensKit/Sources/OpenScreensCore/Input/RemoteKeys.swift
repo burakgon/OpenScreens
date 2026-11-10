@@ -337,6 +337,8 @@ public struct RemoteShortcut: Identifiable, Codable, Hashable, Sendable {
         if modifiers.contains(.command) { parts.append(kind == .windows ? "Win" : "Super") }
         let keyName: String = switch key {
         case .special(.forwardDelete): "Del"
+        // The Mac's Delete key is what a PC keyboard calls Backspace.
+        case .special(.delete): "Backspace"
         case .special(.escape): "Esc"
         case .special(let special): special.title
         default: key.glyph

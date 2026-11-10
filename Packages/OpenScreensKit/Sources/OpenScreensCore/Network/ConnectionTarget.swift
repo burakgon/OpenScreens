@@ -90,10 +90,17 @@ public struct ConnectionTarget: Hashable, Sendable {
 
         // URLComponents keeps IPv6 brackets and percent-encodes zone IDs.
         var host = rawHost
-        if host.hasPrefix("["), host.hasSuffix("]") {
+        let isBracketed = host.hasPrefix("[") && host.hasSuffix("]")
+        if isBracketed {
             host = String(host.dropFirst().dropLast())
         }
         host = host.removingPercentEncoding ?? host
+        guard isBracketed || host.contains(":")
+            ? ConnectionTarget.isIPv6Address(host)
+            : ConnectionTarget.isPlausibleHost(host) else { return nil }
+        if let port = components.port, !ConnectionTarget.isValidPort(port) {
+            return nil
+        }
 
         let query = Dictionary(
             (components.queryItems ?? []).map { ($0.name.lowercased(), $0.value ?? "") },
@@ -143,7 +150,7 @@ public struct ConnectionTarget: Hashable, Sendable {
             guard let close = text.firstIndex(of: "]") else { return nil }
             let host = String(text[text.index(after: text.startIndex)..<close])
             let rest = text[text.index(after: close)...]
-            guard !host.isEmpty else { return nil }
+            guard isIPv6Address(host) else { return nil }
             if rest.isEmpty { return (host, nil) }
             guard rest.hasPrefix(":"), let port = Int(rest.dropFirst()), isValidPort(port) else {
                 return nil
@@ -152,29 +159,44 @@ public struct ConnectionTarget: Hashable, Sendable {
         }
 
         let colons = text.filter { $0 == ":" }.count
-        // Bare IPv6 has several colons and cannot carry a port.
+        // Several colons can only be a bare IPv6 address, which cannot
+        // carry a port.
         if colons > 1 {
-            return isPlausibleHost(String(text), allowColons: true) ? (String(text), nil) : nil
+            return isIPv6Address(String(text)) ? (String(text), nil) : nil
         }
         if colons == 1, let colon = text.firstIndex(of: ":") {
             let host = String(text[..<colon])
             let portText = text[text.index(after: colon)...]
             guard !host.isEmpty, let port = Int(portText), isValidPort(port),
-                  isPlausibleHost(host, allowColons: false) else { return nil }
+                  isPlausibleHost(host) else { return nil }
             return (host, normalizedPort(port))
         }
-        return isPlausibleHost(String(text), allowColons: false) ? (String(text), nil) : nil
+        return isPlausibleHost(String(text)) ? (String(text), nil) : nil
     }
 
     private static func isValidPort(_ port: Int) -> Bool {
         (0...65535).contains(port)
     }
 
-    private static func isPlausibleHost(_ host: String, allowColons: Bool) -> Bool {
+    /// A host name or IPv4 address, going by the characters it is made of.
+    private static func isPlausibleHost(_ host: String) -> Bool {
         guard !host.isEmpty, host.count <= 255 else { return false }
         var allowed = CharacterSet.alphanumerics
-        allowed.insert(charactersIn: "-._%")
-        if allowColons { allowed.insert(charactersIn: ":") }
+        allowed.insert(charactersIn: "-._")
         return host.unicodeScalars.allSatisfy(allowed.contains)
+    }
+
+    /// An IPv6 address, with or without a `%zone` naming the interface.
+    private static func isIPv6Address(_ text: String) -> Bool {
+        let parts = text.split(separator: "%", maxSplits: 1, omittingEmptySubsequences: false)
+        if parts.count == 2 {
+            var allowed = CharacterSet.alphanumerics
+            allowed.insert(charactersIn: "-._")
+            guard !parts[1].isEmpty, parts[1].unicodeScalars.allSatisfy(allowed.contains) else {
+                return false
+            }
+        }
+        var address = in6_addr()
+        return inet_pton(AF_INET6, String(parts[0]), &address) == 1
     }
 }

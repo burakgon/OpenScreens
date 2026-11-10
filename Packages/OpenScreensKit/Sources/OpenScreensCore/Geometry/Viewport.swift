@@ -38,7 +38,9 @@ public struct Viewport: Equatable, Sendable {
     }
 
     /// Local pixels per point.
-    public var backingScale: CGFloat
+    public var backingScale: CGFloat {
+        didSet { if backingScale != oldValue { clampOffset() } }
+    }
 
     public var scaling: ScalingMode {
         didSet {
