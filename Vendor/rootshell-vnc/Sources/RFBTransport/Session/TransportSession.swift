@@ -310,6 +310,45 @@ private struct PendingRemoteDisplaySize: Sendable, Equatable {
     let pointHeight: UInt16
 }
 
+/// The displays a client-sized request asks the server to create: `count`
+/// equal ones, each offering the one mode asked for. Kept outside the actor
+/// so the records can be checked without a live VNC server.
+///
+/// Nothing here says where a display goes. The server places a second
+/// display beside the first and reports both positions in DisplayInfo2.
+func appleVirtualDisplays(
+    count: Int,
+    name: String,
+    pixelWidth: UInt16,
+    pixelHeight: UInt16,
+    pointWidth: UInt16,
+    pointHeight: UInt16,
+    maximumPixelWidth: UInt32,
+    maximumPixelHeight: UInt32
+) -> [AppleVirtualDisplay] {
+    // The display command describes a 2× virtual display with both pixel
+    // and point dimensions. A nominal 110 points/inch gives the virtual display
+    // a stable physical size without affecting its explicit HiDPI mode.
+    let millimetersPerPoint = Float(25.4 / 110.0)
+    let mode = AppleVirtualDisplayMode(
+        pixelWidth: UInt32(pixelWidth),
+        pixelHeight: UInt32(pixelHeight),
+        pointWidth: UInt32(pointWidth),
+        pointHeight: UInt32(pointHeight))
+    // These are fixed capability maxima, not the active mode or an active
+    // resolution cap. The requested pixel/point pair selects 2×.
+    return (0..<max(1, count)).map { index in
+        AppleVirtualDisplay(
+            name: count <= 1 ? name : "\(name) \(index + 1)",
+            widthInMillimeters: Float(pointWidth) * millimetersPerPoint,
+            heightInMillimeters: Float(pointHeight) * millimetersPerPoint,
+            maximumPixelWidth: maximumPixelWidth,
+            maximumPixelHeight: maximumPixelHeight,
+            identifier: UInt32(7 + index),
+            modes: [mode])
+    }
+}
+
 /// Resolve the number of Apple media receiver streams without ever asking for
 /// a display the server did not offer. Kept outside the actor so the negotiation
 /// rule can be verified without a live VNC server.
@@ -3905,30 +3944,15 @@ public actor TransportSession {
     private func sendAppleVirtualDisplaySize(
         _ requested: PendingRemoteDisplaySize
     ) async throws {
-        // The display command describes a 2× virtual display with both pixel
-        // and point dimensions. A nominal 110 points/inch gives the virtual display
-        // a stable physical size without affecting its explicit HiDPI mode.
-        let millimetersPerPoint = Float(25.4 / 110.0)
-        let mode = AppleVirtualDisplayMode(
-            pixelWidth: UInt32(requested.pixelWidth),
-            pixelHeight: UInt32(requested.pixelHeight),
-            pointWidth: UInt32(requested.pointWidth),
-            pointHeight: UInt32(requested.pointHeight))
-        // These are fixed capability maxima, not the active mode or an active
-        // resolution cap. The requested pixel/point pair below selects 2×.
-        let displays = (0..<requestedDisplayCount).map { index in
-            AppleVirtualDisplay(
-                name: requestedDisplayCount == 1
-                    ? "rootshell Virtual Display"
-                    : "rootshell Virtual Display \(index + 1)",
-                widthInMillimeters: Float(requested.pointWidth) * millimetersPerPoint,
-                heightInMillimeters: Float(requested.pointHeight) * millimetersPerPoint,
-                maximumPixelWidth: appleVirtualDisplayMaximumPixelWidth,
-                maximumPixelHeight: appleVirtualDisplayMaximumPixelHeight,
-                originX: UInt16(Int(requested.pixelWidth) * index),
-                identifier: UInt32(7 + index),
-                modes: [mode])
-        }
+        let displays = appleVirtualDisplays(
+            count: requestedDisplayCount,
+            name: "rootshell Virtual Display",
+            pixelWidth: requested.pixelWidth,
+            pixelHeight: requested.pixelHeight,
+            pointWidth: requested.pointWidth,
+            pointHeight: requested.pointHeight,
+            maximumPixelWidth: appleVirtualDisplayMaximumPixelWidth,
+            maximumPixelHeight: appleVirtualDisplayMaximumPixelHeight)
         let previousCaptureLumaSamples = appleMediaActiveCaptureLumaSamples
         let previousTilesPerFrame = activeAppleMediaTilesPerFrame
         let requestedDisplayLumaSamples = Int(requested.pixelWidth)

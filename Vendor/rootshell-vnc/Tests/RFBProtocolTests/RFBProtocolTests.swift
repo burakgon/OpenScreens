@@ -922,8 +922,6 @@ final class MessageWriterTests: XCTestCase {
             heightInMillimeters: 45.25,
             maximumPixelWidth: 3840,
             maximumPixelHeight: 2160,
-            originX: 5,
-            originY: 6,
             identifier: 7,
             modes: [mode])
 
@@ -954,7 +952,7 @@ final class MessageWriterTests: XCTestCase {
         XCTAssertEqual(Data(data[150..<168]), Data([
             0x00, 0x00, 0x0f, 0x00,
             0x00, 0x00, 0x08, 0x70,
-            0x00, 0x05, 0x00, 0x06,
+            0x00, 0x00, 0x00, 0x00,
             0x00, 0x00, 0x00, 0x07,
             0x00, 0x01,
         ]))
@@ -968,6 +966,50 @@ final class MessageWriterTests: XCTestCase {
             0x00, 0x00, 0x04, 0x00,
             0x40, 0x4e, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
             0x11, 0x22, 0x33, 0x44,
+        ]))
+    }
+
+    /// The two fields after the maximum size index `modes`. A server that
+    /// finds either out of range drops the display, so a second display must
+    /// not carry anything but an index there.
+    func testWriteAppleDisplayConfigurationWritesModeIndexesForEachDisplay() {
+        let small = AppleVirtualDisplayMode(
+            pixelWidth: 1280, pixelHeight: 800, pointWidth: 640, pointHeight: 400)
+        let large = AppleVirtualDisplayMode(
+            pixelWidth: 2560, pixelHeight: 1600, pointWidth: 1280, pointHeight: 800)
+        func display(_ identifier: UInt32, current: UInt16, preferred: UInt16) -> AppleVirtualDisplay {
+            AppleVirtualDisplay(
+                name: "Display",
+                widthInMillimeters: 300,
+                heightInMillimeters: 190,
+                maximumPixelWidth: 8192,
+                maximumPixelHeight: 8192,
+                currentModeIndex: current,
+                preferredModeIndex: preferred,
+                identifier: identifier,
+                modes: [small, large])
+        }
+
+        let data = MessageWriter.writeAppleDisplayConfiguration(
+            AppleDisplayConfiguration(displays: [
+                display(7, current: 0, preferred: 1),
+                display(8, current: 1, preferred: 0),
+            ]))
+
+        let recordSize = AppleVirtualDisplay.fixedWireSize + 2 * AppleVirtualDisplayMode.wireSize
+        XCTAssertEqual(data.count, AppleDisplayConfiguration.headerWireSize + 2 * recordSize)
+        XCTAssertEqual(data[7], 2)
+        let first = AppleDisplayConfiguration.headerWireSize
+        let second = first + recordSize
+        XCTAssertEqual(Data(data[first + 146..<first + 156]), Data([
+            0x00, 0x00, 0x00, 0x01,
+            0x00, 0x00, 0x00, 0x07,
+            0x00, 0x02,
+        ]))
+        XCTAssertEqual(Data(data[second + 146..<second + 156]), Data([
+            0x00, 0x01, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x08,
+            0x00, 0x02,
         ]))
     }
 

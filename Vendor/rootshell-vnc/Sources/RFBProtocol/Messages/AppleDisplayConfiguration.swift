@@ -48,8 +48,16 @@ public struct AppleVirtualDisplay: Sendable, Equatable {
     public let heightInMillimeters: Float
     public let maximumPixelWidth: UInt32
     public let maximumPixelHeight: UInt32
-    public let originX: UInt16
-    public let originY: UInt16
+    /// Which of `modes` the display starts in.
+    ///
+    /// The server reads the two 16-bit fields after the maximum size as mode
+    /// indexes and refuses the whole display when either is out of range
+    /// ("N is not a valid current display mode index"); the session then
+    /// stops receiving video. They are not a position: the server arranges
+    /// the displays itself and reports where they are in DisplayInfo2.
+    public let currentModeIndex: UInt16
+    /// The mode the display calls its native one.
+    public let preferredModeIndex: UInt16
     public let identifier: UInt32
     public let modes: [AppleVirtualDisplayMode]
 
@@ -61,12 +69,15 @@ public struct AppleVirtualDisplay: Sendable, Equatable {
         heightInMillimeters: Float,
         maximumPixelWidth: UInt32,
         maximumPixelHeight: UInt32,
-        originX: UInt16 = 0,
-        originY: UInt16 = 0,
+        currentModeIndex: UInt16 = 0,
+        preferredModeIndex: UInt16 = 0,
         identifier: UInt32 = 7,
         modes: [AppleVirtualDisplayMode]
     ) {
         precondition(!modes.isEmpty && modes.count <= Int(UInt16.max))
+        precondition(
+            Int(currentModeIndex) < modes.count
+                && Int(preferredModeIndex) < modes.count)
         self.name = name
         self.flags = flags
         self.attributes = attributes
@@ -74,8 +85,8 @@ public struct AppleVirtualDisplay: Sendable, Equatable {
         self.heightInMillimeters = heightInMillimeters
         self.maximumPixelWidth = maximumPixelWidth
         self.maximumPixelHeight = maximumPixelHeight
-        self.originX = originX
-        self.originY = originY
+        self.currentModeIndex = currentModeIndex
+        self.preferredModeIndex = preferredModeIndex
         self.identifier = identifier
         self.modes = modes
     }

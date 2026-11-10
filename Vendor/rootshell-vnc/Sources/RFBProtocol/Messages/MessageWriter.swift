@@ -190,8 +190,8 @@ public enum MessageWriter: Sendable {
                 at: offset + 134)
             writeUInt32(display.maximumPixelWidth, into: &data, at: offset + 138)
             writeUInt32(display.maximumPixelHeight, into: &data, at: offset + 142)
-            writeUInt16(display.originX, into: &data, at: offset + 146)
-            writeUInt16(display.originY, into: &data, at: offset + 148)
+            writeUInt16(display.currentModeIndex, into: &data, at: offset + 146)
+            writeUInt16(display.preferredModeIndex, into: &data, at: offset + 148)
             writeUInt32(display.identifier, into: &data, at: offset + 150)
             writeUInt16(UInt16(display.modes.count), into: &data, at: offset + 154)
 

@@ -1,3 +1,4 @@
+import RFBProtocol
 import XCTest
 @testable import RFBTransport
 
@@ -168,6 +169,63 @@ final class DisplayCountTests: XCTestCase {
         XCTAssertEqual(
             selectedAppleMediaDisplayCount(offered: 1, requested: 2),
             1)
+    }
+
+    /// The server reads the fields after a display's maximum size as indexes
+    /// into its modes. macOS 27 answers anything else with "not a valid
+    /// current display mode index", creates no display and sends no more
+    /// video, so the second display must not carry its position there.
+    func testEveryVirtualDisplayStartsInItsOnlyMode() throws {
+        let displays = appleVirtualDisplays(
+            count: 2,
+            name: "Desk",
+            pixelWidth: 2_560,
+            pixelHeight: 1_504,
+            pointWidth: 1_280,
+            pointHeight: 752,
+            maximumPixelWidth: 8_192,
+            maximumPixelHeight: 8_192)
+
+        XCTAssertEqual(displays.count, 2)
+        for display in displays {
+            XCTAssertEqual(display.currentModeIndex, 0)
+            XCTAssertEqual(display.preferredModeIndex, 0)
+            XCTAssertEqual(display.modes.count, 1)
+            XCTAssertEqual(display.modes[0].pixelWidth, 2_560)
+            XCTAssertEqual(display.modes[0].pixelHeight, 1_504)
+            XCTAssertEqual(display.modes[0].pointWidth, 1_280)
+            XCTAssertEqual(display.modes[0].pointHeight, 752)
+        }
+        XCTAssertEqual(displays.map(\.identifier), [7, 8])
+        XCTAssertEqual(displays.map(\.name), ["Desk 1", "Desk 2"])
+
+        // On the wire, too: both index fields of both records are zero.
+        let message = ClientMessage.appleDisplayConfiguration(
+            AppleDisplayConfiguration(displays: displays)).serialize()
+        let recordSize = AppleVirtualDisplay.fixedWireSize + AppleVirtualDisplayMode.wireSize
+        XCTAssertEqual(message.count, AppleDisplayConfiguration.headerWireSize + 2 * recordSize)
+        for index in 0..<2 {
+            let record = AppleDisplayConfiguration.headerWireSize + index * recordSize
+            XCTAssertEqual(
+                Data(message[record + 146..<record + 150]),
+                Data([0, 0, 0, 0]),
+                "display \(index + 1)")
+        }
+    }
+
+    func testOneVirtualDisplayKeepsItsNameAsGiven() {
+        let displays = appleVirtualDisplays(
+            count: 1,
+            name: "Desk",
+            pixelWidth: 2_048,
+            pixelHeight: 1_536,
+            pointWidth: 1_024,
+            pointHeight: 768,
+            maximumPixelWidth: 8_192,
+            maximumPixelHeight: 8_192)
+
+        XCTAssertEqual(displays.map(\.name), ["Desk"])
+        XCTAssertEqual(displays.map(\.identifier), [7])
     }
 
 }
