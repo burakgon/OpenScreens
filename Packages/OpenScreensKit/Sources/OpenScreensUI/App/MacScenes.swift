@@ -25,6 +25,9 @@ public struct OpenScreensScenes: Scene {
                 .frame(minWidth: 720, minHeight: 440)
         }
         .defaultSize(width: 980, height: 640)
+        // Always start with the library on screen, whichever windows were
+        // open when the app last quit.
+        .defaultLaunchBehavior(.presented)
         .commands {
             LibraryCommands(model: model)
         }
