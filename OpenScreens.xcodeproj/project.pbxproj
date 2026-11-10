@@ -11,13 +11,25 @@
 		122D16FCC4730D4F758C39A2 /* ConnectIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEC6DFC7177B27E13751098A /* ConnectIntent.swift */; };
 		18451E96E6328CCD5664589F /* OpenScreensUI in Frameworks */ = {isa = PBXBuildFile; productRef = 1D356AC75D4B187F24937B11 /* OpenScreensUI */; };
 		33C31112E4BF4D10A0EB1D18 /* OpenScreensUI in Frameworks */ = {isa = PBXBuildFile; productRef = 6CBFB62E94001AE5A77A8AB6 /* OpenScreensUI */; };
+		36B09FB48D0A989126A51747 /* SessionUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B38BF83644E851B10DD4C16D /* SessionUITests.swift */; };
 		394B63C54EEE3765928C7674 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 9D1B1FE9A421BC617637517E /* Assets.xcassets */; };
 		928EDC606268DA95EB82703A /* OpenScreensApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5667D7A07CC8C4897DA52F09 /* OpenScreensApp.swift */; };
 		A203453761CD80B71EB414DA /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 9D1B1FE9A421BC617637517E /* Assets.xcassets */; };
 		B399BC05D35C0DE1EB1C8801 /* ConnectIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEC6DFC7177B27E13751098A /* ConnectIntent.swift */; };
+		C2C400E1AE6EDE5DAFB0E731 /* RFBTestServer in Frameworks */ = {isa = PBXBuildFile; productRef = A88694B4833703268CD9139F /* RFBTestServer */; };
 		CB9C169741A88B535A5C01F1 /* OpenScreensCore in Frameworks */ = {isa = PBXBuildFile; productRef = EAEF0BF6A02CC4E68BB2097E /* OpenScreensCore */; };
 		DD4FF19E6D178AB96AE066A5 /* OpenScreensCore in Frameworks */ = {isa = PBXBuildFile; productRef = 884B9F3B2A26D3803168967C /* OpenScreensCore */; };
 /* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		7CE41345F2FE23BAD4F1FC4F /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = F0B2FF0D5B099A65047FBF0D /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = DFD5A882D62A986B4C60E02E;
+			remoteInfo = "OpenScreens iOS";
+		};
+/* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
 		09FFA95AEF8BCFF5C17022BD /* OpenScreens.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = OpenScreens.entitlements; sourceTree = "<group>"; };
@@ -29,6 +41,8 @@
 		98E870A4338DEB424CCC0C5E /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		9D1B1FE9A421BC617637517E /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		9E7349B5B05A9A64AABCEBCF /* OpenScreensApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenScreensApp.swift; sourceTree = "<group>"; };
+		A0937001AED5B5953955D719 /* OpenScreens iOS UITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = "OpenScreens iOS UITests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
+		B38BF83644E851B10DD4C16D /* SessionUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionUITests.swift; sourceTree = "<group>"; };
 		C745C133F3E103C9B3E9DC77 /* OpenScreens iOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = "OpenScreens iOS.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		E2BF213BE8A90354C517D92D /* Base.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Base.xcconfig; sourceTree = "<group>"; };
 		EEC6DFC7177B27E13751098A /* ConnectIntent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectIntent.swift; sourceTree = "<group>"; };
@@ -53,6 +67,14 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		FABAA7378A149EE35AD5D410 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				C2C400E1AE6EDE5DAFB0E731 /* RFBTestServer in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -60,6 +82,7 @@
 			isa = PBXGroup;
 			children = (
 				4F338962DDEADF0779C43422 /* iOS */,
+				C70807A877BC7E8BA9187A58 /* iOSUITests */,
 				633439486FE23EB40FECE532 /* macOS */,
 				AF4F25CBA2B36873C2A5F4D0 /* Shared */,
 			);
@@ -121,6 +144,14 @@
 			path = Intents;
 			sourceTree = "<group>";
 		};
+		C70807A877BC7E8BA9187A58 /* iOSUITests */ = {
+			isa = PBXGroup;
+			children = (
+				B38BF83644E851B10DD4C16D /* SessionUITests.swift */,
+			);
+			path = iOSUITests;
+			sourceTree = "<group>";
+		};
 		DD16F372E099448287B9F1F6 /* Config */ = {
 			isa = PBXGroup;
 			children = (
@@ -132,6 +163,7 @@
 		E590E3626B8B9DBF84E51413 /* Products */ = {
 			isa = PBXGroup;
 			children = (
+				A0937001AED5B5953955D719 /* OpenScreens iOS UITests.xctest */,
 				C745C133F3E103C9B3E9DC77 /* OpenScreens iOS.app */,
 				9435DCF3227A4B7B8F8D2DB7 /* OpenScreens.app */,
 			);
@@ -141,6 +173,26 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+		AC105D4899BDD195609106D3 /* OpenScreens iOS UITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 5962A5C889F197CF2EAD1D76 /* Build configuration list for PBXNativeTarget "OpenScreens iOS UITests" */;
+			buildPhases = (
+				38EB4F700558586D6FEA77BC /* Sources */,
+				FABAA7378A149EE35AD5D410 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				96843C66719786545FAA10FB /* PBXTargetDependency */,
+			);
+			name = "OpenScreens iOS UITests";
+			packageProductDependencies = (
+				A88694B4833703268CD9139F /* RFBTestServer */,
+			);
+			productName = "OpenScreens iOS UITests";
+			productReference = A0937001AED5B5953955D719 /* OpenScreens iOS UITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
 		CBC80993B877F70B11D25A27 /* OpenScreens */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = FB87AF73D8251B2190CA582D /* Build configuration list for PBXNativeTarget "OpenScreens" */;
@@ -192,6 +244,10 @@
 				BuildIndependentTargetsInParallel = YES;
 				LastUpgradeCheck = 1430;
 				TargetAttributes = {
+					AC105D4899BDD195609106D3 = {
+						ProvisioningStyle = Automatic;
+						TestTargetID = DFD5A882D62A986B4C60E02E;
+					};
 					CBC80993B877F70B11D25A27 = {
 						ProvisioningStyle = Automatic;
 					};
@@ -219,6 +275,7 @@
 			targets = (
 				CBC80993B877F70B11D25A27 /* OpenScreens */,
 				DFD5A882D62A986B4C60E02E /* OpenScreens iOS */,
+				AC105D4899BDD195609106D3 /* OpenScreens iOS UITests */,
 			);
 		};
 /* End PBXProject section */
@@ -243,6 +300,14 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
+		38EB4F700558586D6FEA77BC /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				36B09FB48D0A989126A51747 /* SessionUITests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		5A25FA7C00D62280DD6E5594 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -262,6 +327,14 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		96843C66719786545FAA10FB /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = DFD5A882D62A986B4C60E02E /* OpenScreens iOS */;
+			targetProxy = 7CE41345F2FE23BAD4F1FC4F /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		24C01A35A022375921496861 /* Debug */ = {
@@ -337,6 +410,23 @@
 				SWIFT_OPTIMIZATION_LEVEL = "-O";
 			};
 			name = Release;
+		};
+		7A57CC92D67A6FCA316B4C26 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "$(OPENSCREENS_BUNDLE_ID).uitests";
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = "OpenScreens iOS";
+			};
+			name = Debug;
 		};
 		A3799C928A9574F209943256 /* Debug */ = {
 			isa = XCBuildConfiguration;
@@ -436,6 +526,23 @@
 			};
 			name = Release;
 		};
+		D271DCFD8F0CAACA8EFA4F33 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "$(OPENSCREENS_BUNDLE_ID).uitests";
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = "OpenScreens iOS";
+			};
+			name = Release;
+		};
 		E6D28AE314FAE07AE672B154 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -474,6 +581,15 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
+		5962A5C889F197CF2EAD1D76 /* Build configuration list for PBXNativeTarget "OpenScreens iOS UITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				7A57CC92D67A6FCA316B4C26 /* Debug */,
+				D271DCFD8F0CAACA8EFA4F33 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 		FB87AF73D8251B2190CA582D /* Build configuration list for PBXNativeTarget "OpenScreens" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
@@ -504,6 +620,10 @@
 		884B9F3B2A26D3803168967C /* OpenScreensCore */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = OpenScreensCore;
+		};
+		A88694B4833703268CD9139F /* RFBTestServer */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = RFBTestServer;
 		};
 		EAEF0BF6A02CC4E68BB2097E /* OpenScreensCore */ = {
 			isa = XCSwiftPackageProductDependency;

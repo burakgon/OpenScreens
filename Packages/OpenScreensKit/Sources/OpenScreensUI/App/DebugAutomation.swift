@@ -14,6 +14,7 @@ import SwiftUI
 ///     OPENSCREENS_DISPLAYS=single|allCombined|twoVirtual
 ///     OPENSCREENS_KEYBOARD=automatic|keystrokes|unicode
 ///     OPENSCREENS_OBSERVE=1                           watch without sending input
+///     OPENSCREENS_TOUCH=trackpad|touch                how touches drive the pointer
 ///     OPENSCREENS_SECTION=favorites|recents|nearby|tailscale   open the library there
 ///     OPENSCREENS_TRUST_HOST_KEY=1                    accept the SSH server's key when asked
 ///     OPENSCREENS_SSH_PASSWORD=secret                 answer the SSH sign-in when asked
@@ -69,6 +70,9 @@ enum DebugAutomation {
             }
             if environment["OPENSCREENS_OBSERVE"] == "1" {
                 settings.observeOnly = true
+            }
+            if let touch = environment["OPENSCREENS_TOUCH"].flatMap(TouchInputMode.init(rawValue:)) {
+                settings.touchInput = touch
             }
         }
         present(session)

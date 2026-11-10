@@ -58,6 +58,23 @@ targets:
       - package: OpenScreensKit
         product: OpenScreensCore
 
+  # Drives the iPhone and iPad app through touches and key presses against a
+  # server the tests run themselves.
+  OpenScreens iOS UITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: Apps/iOSUITests
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(OPENSCREENS_BUNDLE_ID).uitests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: OpenScreens iOS
+    dependencies:
+      - target: OpenScreens iOS
+      - package: OpenScreensKit
+        product: RFBTestServer
+
 schemes:
   OpenScreens:
     build:
@@ -71,7 +88,12 @@ schemes:
     build:
       targets:
         OpenScreens iOS: all
+        OpenScreens iOS UITests: [test]
     run:
       config: Debug
+    test:
+      config: Debug
+      targets:
+        - OpenScreens iOS UITests
     archive:
       config: Release

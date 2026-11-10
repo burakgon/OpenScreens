@@ -12,6 +12,9 @@ let package = Package(
     products: [
         .library(name: "OpenScreensCore", targets: ["OpenScreensCore"]),
         .library(name: "OpenScreensUI", targets: ["OpenScreensUI"]),
+        // For the apps' interface tests, which run their own server for the
+        // app under test to connect to.
+        .library(name: "RFBTestServer", targets: ["RFBTestServer"]),
     ],
     dependencies: [
         // Remote-desktop engine: RFB, Apple Screen Sharing (Standard and High
