@@ -54,10 +54,36 @@ let package = Package(
             ]
         ),
 
+        // A tiny RFB server showing a drawn desktop. Used by the end-to-end
+        // tests and by the demo server below; never linked into the apps.
+        .target(
+            name: "RFBTestServer",
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
+
+        // `swift run openscreens-demo-server` — something to connect to when
+        // there is no real computer at hand.
+        .executableTarget(
+            name: "openscreens-demo-server",
+            dependencies: ["RFBTestServer"],
+            path: "Sources/DemoServer",
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
+
         .testTarget(
             name: "OpenScreensCoreTests",
             dependencies: ["OpenScreensCore"],
             swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
+
+        // End-to-end: a real session against the test server on loopback.
+        .testTarget(
+            name: "OpenScreensUITests",
+            dependencies: ["OpenScreensUI", "OpenScreensCore", "RFBTestServer"],
+            swiftSettings: [
+                .swiftLanguageMode(.v6),
+                .defaultIsolation(MainActor.self),
+            ]
         ),
     ]
 )

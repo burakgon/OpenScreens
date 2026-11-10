@@ -702,9 +702,18 @@ public final class RemoteSession: Identifiable {
     private static func describe(_ error: any Error) -> String {
         if let error = error as? VNCError {
             switch error {
-            case .connectionFailed(let detail): return detail
-            case .unsupportedFeature(let detail): return detail
-            default: break
+            case .connectionFailed(let detail):
+                if detail.localizedCaseInsensitiveContains("refused") {
+                    return "The computer refused the connection. Check that Screen Sharing or its VNC server is turned on, and that the port is right."
+                }
+                if detail.localizedCaseInsensitiveContains("timed out") {
+                    return "The computer did not answer. Check that it is awake and reachable from this network."
+                }
+                return detail
+            case .unsupportedFeature(let detail):
+                return detail
+            default:
+                break
             }
         }
         return error.localizedDescription
