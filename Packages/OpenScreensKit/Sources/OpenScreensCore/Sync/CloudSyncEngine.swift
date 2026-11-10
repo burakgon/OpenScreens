@@ -40,7 +40,9 @@ import Observation
 ///
 /// If the library would not fit inside the store's limits nothing at all is
 /// uploaded, ``status`` becomes ``Status/failed(_:)``, and the library on
-/// this device is left exactly as it is.
+/// this device is left exactly as it is. A change that adds no entries — an
+/// edit, or a deletion taking the place of what it deletes — is not held up
+/// by a store that already has more entries than the limit allows.
 ///
 /// ## Wiring it up
 ///
@@ -335,13 +337,20 @@ public final class CloudSyncEngine {
         // store that has not been merged into the library yet.
         let local = library.document
         let desired = LibraryDocument.merge(local, remote, now: now)
-        let plan: CloudSyncPlan
+        var plan: CloudSyncPlan
         do {
             plan = try CloudSyncPlan(
                 desired: desired, cloud: cloud, schemaVersion: Self.schemaVersion, now: now)
         } catch {
             return .failed(
                 "The library could not be prepared for iCloud: \(error.localizedDescription)")
+        }
+        if case .keyCount? = plan.violation(of: limits) {
+            // Out of keys. The deletion of something iCloud does not hold has
+            // nothing there to delete, and must not be what stands in the
+            // way: taking back a computer that did not fit would otherwise
+            // leave the library too large by the record of having done so.
+            plan = plan.postponingDeletionsThatCanWait()
         }
         if let violation = plan.violation(of: limits) {
             return .failed(Self.describe(violation, in: desired))

@@ -278,6 +278,11 @@ struct CloudSyncPlan: Sendable {
     private(set) var projectedKeyCount = 0
     /// How many bytes the store would hold afterwards, foreign keys included.
     private(set) var projectedByteCount = 0
+    /// How many keys the store holds now, foreign ones included.
+    private(set) var existingKeyCount = 0
+    /// Deletions among ``writes`` that have nothing in the store to delete:
+    /// neither the item nor an earlier record of its deletion is there.
+    private var deletionsThatCanWait: Set<CloudKey> = []
 
     var isEmpty: Bool { writes.isEmpty && removals.isEmpty }
 
@@ -407,15 +412,38 @@ struct CloudSyncPlan: Sendable {
             sizes[key.rawValue] = nil
         }
 
+        // A deletion normally takes over the entry of what it deletes: one
+        // key is written and one removed. Where the store holds neither the
+        // item nor an earlier record of its deletion, the record is an entry
+        // on top — the price of telling a device that still has the item,
+        // should one turn up.
+        let removed = Set(removals)
+        var deletionsThatCanWait: Set<CloudKey> = []
+        for write in writes {
+            guard case .tombstone(let id) = write.key, !owned.contains(write.key),
+                  !removed.contains(.computer(id)), !removed.contains(.group(id)) else { continue }
+            deletionsThatCanWait.insert(write.key)
+        }
+
         self.writes = writes
         self.removals = removals
         self.projectedKeyCount = sizes.count
         self.projectedByteCount = sizes.values.reduce(0, +)
+        self.existingKeyCount = cloud.sizes.count
+        self.deletionsThatCanWait = deletionsThatCanWait
     }
 
     /// The first limit the plan would break, if any.
     ///
     /// A plan that only deletes is always allowed: it can only make room.
+    ///
+    /// So is one that leaves the store with no more keys than it has, even
+    /// if that is already more than the limit — two devices can each add
+    /// the last few that fit. Editing replaces a value and deleting swaps an
+    /// item's key for the record of its deletion; refusing those would
+    /// freeze the library on every device, deletions included, and it is
+    /// deletions that bring the number down again once they have been
+    /// remembered long enough.
     func violation(of limits: CloudSyncEngine.Limits) -> CloudLimitViolation? {
         guard !writes.isEmpty else { return nil }
         if let largest = writes.max(by: { $0.data.count < $1.data.count }),
@@ -423,13 +451,32 @@ struct CloudSyncPlan: Sendable {
             return .valueBytes(
                 key: largest.key, size: largest.data.count, limit: limits.maximumValueBytes)
         }
-        if projectedKeyCount > limits.maximumKeyCount {
+        if projectedKeyCount > limits.maximumKeyCount, projectedKeyCount > existingKeyCount {
             return .keyCount(needed: projectedKeyCount, limit: limits.maximumKeyCount)
         }
         if projectedByteCount > limits.maximumTotalBytes {
             return .totalBytes(needed: projectedByteCount, limit: limits.maximumTotalBytes)
         }
         return nil
+    }
+
+    /// The same plan without the deletions that have nothing in the store to
+    /// delete, for when the store is out of keys.
+    ///
+    /// Such a deletion stays in the library and is planned again on every
+    /// pass. It is uploaded once there is room — or once the item it deletes
+    /// shows up in the store, where it then takes that item's key and needs
+    /// none of its own.
+    func postponingDeletionsThatCanWait() -> CloudSyncPlan {
+        guard !deletionsThatCanWait.isEmpty else { return self }
+        var plan = self
+        for write in writes where deletionsThatCanWait.contains(write.key) {
+            plan.projectedKeyCount -= 1
+            plan.projectedByteCount -= write.key.rawValue.utf8.count + write.data.count
+        }
+        plan.writes.removeAll { deletionsThatCanWait.contains($0.key) }
+        plan.deletionsThatCanWait = []
+        return plan
     }
 
     /// Whether two copies of a computer differ in nothing but when it was

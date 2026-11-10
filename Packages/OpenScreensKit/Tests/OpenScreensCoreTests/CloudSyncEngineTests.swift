@@ -1442,6 +1442,101 @@ struct CloudSyncEngineTests {
         #expect(device.store.values[tombstoneKey(alpha.id)] != nil)
     }
 
+    @Test func takingBackWhatDidNotFitPutsTheLibraryBackInStep() throws {
+        let limits = CloudSyncEngine.Limits(
+            maximumKeyCount: 4, maximumTotalBytes: 1_000_000, maximumValueBytes: 1_000_000)
+        let device = SimulatedDevice(limits: limits)
+        let fitting = ["One", "Two", "Three"].map { device.library.add(computer($0)) }
+        let four = device.library.add(computer("Four"))
+        #expect(device.failure != nil)
+        let stored = device.store.values
+
+        // The deletion of a computer iCloud never held has nothing there to
+        // delete. It must not need an entry of its own and so keep the
+        // library one too large — for as long as deletions are remembered.
+        tick()
+        device.library.delete(four.id)
+
+        #expect(device.failure == nil)
+        #expect(device.lastSync != nil)
+        #expect(device.store.values == stored)
+        // The deletion is still remembered here, should the computer turn
+        // up from somewhere after all.
+        #expect(device.library.document.tombstones[four.id.uuidString] != nil)
+
+        // And changes travel again.
+        tick()
+        device.library.update(fitting[0].id) { $0.notes = "edited once it fitted again" }
+        #expect(device.failure == nil)
+        #expect(try device.store.computer(fitting[0].id)?.notes == "edited once it fitted again")
+        #expect(device.store.keys(withPrefix: "t.").isEmpty)
+    }
+
+    @Test func aLibraryThatWasEmptiedIsNeverTooLargeToSync() throws {
+        let limits = CloudSyncEngine.Limits(
+            maximumKeyCount: 4, maximumTotalBytes: 1_000_000, maximumValueBytes: 1_000_000)
+        let device = SimulatedDevice(limits: limits)
+        let fitting = ["One", "Two", "Three"].map { device.library.add(computer($0)) }
+        let four = device.library.add(computer("Four"))
+        #expect(device.failure != nil)
+
+        // Deleting a computer that is in iCloud frees nothing at first: the
+        // record of the deletion takes its entry over. With the fourth still
+        // waiting, five entries are needed as before.
+        tick()
+        device.library.delete(fitting[0].id)
+        device.library.delete(fitting[1].id)
+        #expect(try #require(device.failure).contains("need 5 entries"))
+
+        // Once nothing is waiting to go up, what is left does fit.
+        device.library.delete(fitting[2].id)
+        device.library.delete(four.id)
+        #expect(device.library.computers.isEmpty)
+        #expect(device.failure == nil)
+        #expect(device.lastSync != nil)
+        #expect(device.store.keys(withPrefix: "c.").isEmpty)
+        #expect(Set(device.store.keys(withPrefix: "t.")) == Set(fitting.map { tombstoneKey($0.id) }))
+    }
+
+    @Test func whenICloudAlreadyHoldsMoreThanTheLimitChangesThatAddNothingStillGoThrough() throws {
+        // Two devices can each add the last computers that fit; together
+        // they are over. Here the Mac simply allows more than the phone.
+        let store = InMemoryCloudStore()
+        let mac = SimulatedDevice(store: store)
+        let phone = SimulatedDevice(
+            store: store,
+            limits: CloudSyncEngine.Limits(
+                maximumKeyCount: 4, maximumTotalBytes: 1_000_000, maximumValueBytes: 1_000_000))
+        let computers = ["One", "Two", "Three", "Four", "Five"].map { mac.library.add(computer($0)) }
+        phone.storeChangedExternally()
+        #expect(phone.library.computers.count == 5)
+        #expect(store.values.count == 6)
+
+        // An edit replaces a value.
+        tick()
+        phone.library.update(computers[0].id) { $0.notes = "edited on the phone" }
+        #expect(phone.failure == nil)
+        #expect(try store.computer(computers[0].id)?.notes == "edited on the phone")
+
+        // A deletion swaps the computer's entry for the record of it.
+        phone.library.delete(computers[1].id)
+        #expect(phone.failure == nil)
+        #expect(store.values[key(computers[1])] == nil)
+        #expect(store.values[tombstoneKey(computers[1].id)] != nil)
+        #expect(store.values.count == 6)
+        mac.storeChangedExternally()
+        #expect(mac.library.computer(computers[1].id) == nil)
+        #expect(mac.library.computer(computers[0].id)?.notes == "edited on the phone")
+
+        // Adding is what has to wait, and with it everything else.
+        let before = store.values
+        let six = phone.library.add(computer("Six"))
+        #expect(try #require(phone.failure).contains("allows 4"))
+        #expect(store.values[key(six)] == nil)
+        phone.library.update(computers[2].id) { $0.notes = "waits with it" }
+        #expect(store.values == before)
+    }
+
     @Test func anItemTooLargeForICloudIsNamedInTheFailure() throws {
         let limits = CloudSyncEngine.Limits(
             maximumKeyCount: 1024, maximumTotalBytes: 1_000_000, maximumValueBytes: 3_000)
@@ -2062,6 +2157,75 @@ struct CloudLibraryLayoutTests {
         #expect(plan.writes.isEmpty)
         #expect(plan.removals.count == 5)
         #expect(plan.violation(of: tiny) == nil)
+    }
+
+    @Test func aPlanThatAddsNoKeysIsAllowedInAStoreThatIsAlreadyOverItsLimit() throws {
+        let kept = LibraryFixtures.computer("Kept", modifiedAt: now.addingTimeInterval(-500))
+        let doomed = LibraryFixtures.computer("Doomed", modifiedAt: now.addingTimeInterval(-500))
+        let cloud = try snapshot(of: LibraryDocument(computers: [kept, doomed]))
+        // Three keys are there — two computers and `meta` — where two are allowed.
+        let tight = CloudSyncEngine.Limits(
+            maximumKeyCount: 2, maximumTotalBytes: 1_000_000, maximumValueBytes: 1_000_000)
+
+        var edited = kept
+        edited.notes = "edited"
+        edited.modifiedAt = now.addingTimeInterval(-100)
+        let editing = try makePlan(LibraryDocument(computers: [edited, doomed]), against: cloud)
+        #expect(editing.existingKeyCount == 3)
+        #expect(editing.projectedKeyCount == 3)
+        #expect(editing.violation(of: tight) == nil)
+
+        let deleting = try makePlan(
+            LibraryDocument(
+                computers: [kept], tombstones: [doomed.id.uuidString: now.addingTimeInterval(-10)]),
+            against: cloud)
+        #expect(deleting.writes.map(\.key) == [.tombstone(doomed.id)])
+        #expect(deleting.removals == [.computer(doomed.id)])
+        #expect(deleting.projectedKeyCount == 3)
+        #expect(deleting.violation(of: tight) == nil)
+
+        let added = LibraryFixtures.computer("Added", modifiedAt: now.addingTimeInterval(-100))
+        let adding = try makePlan(LibraryDocument(computers: [kept, doomed, added]), against: cloud)
+        #expect(adding.violation(of: tight) == .keyCount(needed: 4, limit: 2))
+
+        // The other limits are what they were.
+        var tiny = tight
+        tiny.maximumTotalBytes = 10
+        #expect(editing.violation(of: tiny) == .totalBytes(needed: editing.projectedByteCount, limit: 10))
+    }
+
+    @Test func aDeletionOfSomethingTheStoreDoesNotHoldCanWaitForRoom() throws {
+        let kept = LibraryFixtures.computer("Kept", modifiedAt: now.addingTimeInterval(-500))
+        let inStore = LibraryFixtures.computer("In the store", modifiedAt: now.addingTimeInterval(-500))
+        let cloud = try snapshot(of: LibraryDocument(computers: [kept, inStore]))
+        let neverUploaded = UUID()
+        let plan = try makePlan(
+            LibraryDocument(computers: [kept], tombstones: [
+                inStore.id.uuidString: now.addingTimeInterval(-10),
+                neverUploaded.uuidString: now.addingTimeInterval(-10),
+            ]),
+            against: cloud)
+        #expect(Set(plan.writes.map(\.key)) == [.tombstone(inStore.id), .tombstone(neverUploaded)])
+        #expect(plan.projectedKeyCount == 4)
+
+        // Only the deletion with nothing to delete is put off; the other
+        // takes the place of the computer it removes.
+        let postponed = plan.postponingDeletionsThatCanWait()
+        #expect(postponed.writes.map(\.key) == [.tombstone(inStore.id)])
+        #expect(postponed.removals == [.computer(inStore.id)])
+        #expect(postponed.projectedKeyCount == 3)
+        #expect(postponed.projectedByteCount < plan.projectedByteCount)
+        #expect(postponed.postponingDeletionsThatCanWait().writes == postponed.writes)
+
+        // A deletion that is already recorded in the store, and only gets a
+        // later date, takes no key and is not put off.
+        let known = try snapshot(of: LibraryDocument(
+            computers: [kept], tombstones: [neverUploaded.uuidString: now.addingTimeInterval(-50)]))
+        let redated = try makePlan(
+            LibraryDocument(computers: [kept], tombstones: [neverUploaded.uuidString: now.addingTimeInterval(-10)]),
+            against: known)
+        #expect(redated.writes.map(\.key) == [.tombstone(neverUploaded)])
+        #expect(redated.postponingDeletionsThatCanWait().writes == redated.writes)
     }
 
     @Test func readingTheSameStoreTwiceGivesTheSameSnapshot() throws {
