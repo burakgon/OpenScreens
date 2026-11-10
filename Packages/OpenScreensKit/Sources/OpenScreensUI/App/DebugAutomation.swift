@@ -1,6 +1,7 @@
 #if DEBUG
 import Foundation
 import OpenScreensCore
+import rootshellVNC
 import SwiftUI
 
 /// Scripted launches for development and end-to-end checks.
@@ -26,6 +27,7 @@ import SwiftUI
 ///     OPENSCREENS_REPORT=/path/prefix                 write prefix.json and prefix.png
 ///     OPENSCREENS_REPORT_AFTER=6                      seconds to wait after connecting
 ///     OPENSCREENS_EXIT=1                              quit after reporting
+///     OPENSCREENS_ENGINE_LOG=info|debug|trace         print the engine's log
 ///
 /// None of this exists in release builds.
 enum DebugAutomation {
@@ -48,6 +50,13 @@ enum DebugAutomation {
               let address = environment["OPENSCREENS_CONNECT"],
               var target = ConnectionTarget(text: address) else { return }
         didStart = true
+        if let level = environment["OPENSCREENS_ENGINE_LOG"] {
+            // The engine logs privately to the system log, which cannot be
+            // read back; this is the same stream on standard error.
+            VNCDebugLogging.install(minimumLevel: level) { level, category, message in
+                FileHandle.standardError.write(Data("[engine \(level) \(category)] \(message)\n".utf8))
+            }
+        }
         if let kind = environment["OPENSCREENS_KIND"].flatMap(ComputerKind.init(rawValue:)) {
             target.kind = kind
         }
