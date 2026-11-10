@@ -1,0 +1,34 @@
+# macOS
+.DS_Store
+
+# Xcode
+build/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+*.xcworkspace/xcuserdata/
+*.xcodeproj/xcuserdata/
+*.xcodeproj/project.xcworkspace/xcuserdata/
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# Swift Package Manager
+.build/
+.swiftpm/
+Packages/*/.build/
+Vendor/*/.build/
+
+# Release artifacts
+dist/
+*.dmg
+*.xcarchive
+
+# Secrets — never commit signing material or API keys
+*.p8
+*.p12
+*.mobileprovision
+*.provisionprofile
+.env
+.env.*
+AuthKey_*.p8
