@@ -555,6 +555,71 @@ struct CloudSyncEngineTests {
         #expect(try store.computer(studio.id)?.notes == "edited here")
     }
 
+    /// A record whose modification date is missing, or is no date at all, is
+    /// not set aside as unreadable. Nothing in it is beyond this version,
+    /// and a record nobody reads would stay in iCloud for good, unseen and
+    /// taking up room. Read as the oldest there is, it never wins over a
+    /// copy that has a date, is listed where there is no such copy, and is
+    /// put right by the first edit or removed by a deletion like any other.
+    @Test(arguments: ["inf", "-inf", "nan", nil] as [String?])
+    func aRecordWithoutAUsableDateIsReadAsTheOldestThereIs(date: String?) throws {
+        let other = SimulatedDevice()
+        let studio = other.library.add(computer("Studio"))
+        let original = try #require(other.store.values[key(studio)])
+        var fields = try #require(
+            try JSONSerialization.jsonObject(with: original) as? [String: Any])
+        if let date {
+            fields["modifiedAt"] = date
+        } else {
+            fields.removeValue(forKey: "modifiedAt")
+        }
+        var contents = other.store.values
+        contents[key(studio)] = try JSONSerialization.data(withJSONObject: fields)
+
+        // A device with nothing of its own lists it, leaves it as it is in
+        // iCloud, and can still save its library and read it back.
+        let scratch = try ScratchDirectory()
+        let file = scratch.file("Library.json")
+        let store = InMemoryCloudStore(values: contents)
+        let library = LibraryStore(fileURL: file, backupsDirectory: nil)
+        let engine = CloudSyncEngine(
+            library: library, store: store, notificationCenter: NotificationCenter())
+        library.onChange = { [weak engine] in engine?.libraryDidChange($0) }
+        engine.isEnabled = true
+        #expect(library.computer(studio.id)?.name == "Studio")
+        #expect(library.computer(studio.id)?.modifiedAt == .distantPast)
+        #expect(store.operations.isEmpty)
+        library.saveNow()
+        #expect(library.lastError == nil)
+        #expect(LibraryStore(fileURL: file, backupsDirectory: nil).computers.map(\.id) == [studio.id])
+
+        // An edit stamps it properly, and that is what iCloud then holds.
+        library.update(studio.id) { $0.name = "Edited here" }
+        let edited = try #require(try store.computer(studio.id))
+        #expect(edited.name == "Edited here")
+        #expect(edited.modifiedAt > Date.now.addingTimeInterval(-60))
+        engine.syncNow()
+        #expect(library.computer(studio.id) == edited)
+
+        // A device that has a copy with a date keeps its own, and puts it in
+        // iCloud in place of the one without.
+        let mine = LibraryFixtures.computer(
+            "Mine", id: studio.id, modifiedAt: LibraryFixtures.recentWholeSecond())
+        let keeper = SimulatedDevice(store: InMemoryCloudStore(values: contents), syncEnabled: false)
+        keeper.library.merge(LibraryDocument(computers: [mine]))
+        keeper.engine.isEnabled = true
+        #expect(keeper.library.computer(studio.id) == mine)
+        #expect(try keeper.store.computer(studio.id) == mine)
+
+        // And it can be deleted like any other.
+        let deleter = SimulatedDevice(store: InMemoryCloudStore(values: contents))
+        deleter.library.delete(studio.id)
+        deleter.engine.syncNow()
+        #expect(deleter.library.computers.isEmpty)
+        #expect(deleter.store.values[key(studio)] == nil)
+        #expect(deleter.store.values[tombstoneKey(studio.id)] != nil)
+    }
+
     // MARK: - Two devices, one store
 
     @Test func turningSyncOnMergesTheLibraryWithICloudBothWays() {
