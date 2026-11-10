@@ -898,37 +898,241 @@ struct CloudSyncEngineTests {
         #expect(cloud.hasConverged)
     }
 
-    @Test func copiesThatNothingCanOrderDoNotMakeDevicesFightOverICloud() throws {
+    @Test(arguments: [false, true])
+    func copiesStampedAlikeSettleOnOneAndDoNotMakeDevicesFightOverICloud(
+        theOneThatStandsUploadsFirst: Bool
+    ) throws {
         // Two devices hold different copies of a computer with the very same
-        // modification date. The library has no way to pick one (see the
-        // known-bug suite), so each device keeps its own. What must not
-        // happen is that each keeps uploading its copy over the other's.
+        // modification date. Neither is newer, so the library picks by the
+        // copies themselves — the same one on every device — and the device
+        // that holds it uploads it, even over the other one. Both end up
+        // with it, iCloud holds it, and then nobody has anything to upload:
+        // the devices neither keep their own copy nor fight over the key.
         let id = UUID()
         let stamp = LibraryFixtures.recentWholeSecond()
+        let onMac = LibraryFixtures.computer("Renamed on the Mac", id: id, modifiedAt: stamp)
+        let onPhone = LibraryFixtures.computer("Renamed on the phone", id: id, modifiedAt: stamp)
+        let standing = Computer.resolve(onMac, onPhone)
+        #expect(standing == onMac || standing == onPhone)
+
         let cloud = SimulatedCloud()
         let mac = cloud.addDevice(syncEnabled: false)
         let phone = cloud.addDevice(syncEnabled: false)
-        mac.library.merge(LibraryDocument(computers: [
-            LibraryFixtures.computer("Renamed on the Mac", id: id, modifiedAt: stamp),
-        ]))
-        phone.library.merge(LibraryDocument(computers: [
-            LibraryFixtures.computer("Renamed on the phone", id: id, modifiedAt: stamp),
-        ]))
+        mac.library.merge(LibraryDocument(computers: [onMac]))
+        phone.library.merge(LibraryDocument(computers: [onPhone]))
 
         mac.engine.isEnabled = true
         phone.engine.isEnabled = true
+        // iCloud keeps whichever upload arrives last. When that is the copy
+        // that does not stand, the device holding the other uploads again.
+        let holder = standing == onMac ? mac : phone
+        let other = standing == onMac ? phone : mac
+        cloud.exchange(uploadOrder: theOneThatStandsUploadsFirst ? [holder, other] : [other, holder])
         #expect(cloud.settle() <= 2)
 
-        // iCloud holds one of the two, and it stays that one.
+        #expect(mac.library.computer(id) == standing)
+        #expect(phone.library.computer(id) == standing)
         let settled = try #require(cloud.server["c.\(id.uuidString)"])
+        #expect(try CloudCoding.makeDecoder().decode(Computer.self, from: settled) == standing)
+
+        // And it stays that one.
         for _ in 0..<3 {
             mac.engine.syncNow()
             phone.engine.syncNow()
             #expect(cloud.exchange() == 0)
         }
         #expect(cloud.server["c.\(id.uuidString)"] == settled)
+        #expect(cloud.hasConverged)
         #expect(mac.lastSync != nil)
         #expect(phone.lastSync != nil)
+    }
+
+    @Test func aDeviceThatJoinsAfterTwoCopiesWereStampedAlikeGetsTheOneTheOthersHave() throws {
+        let id = UUID()
+        let stamp = LibraryFixtures.recentWholeSecond()
+        let cloud = SimulatedCloud()
+        let mac = cloud.addDevice(syncEnabled: false)
+        let phone = cloud.addDevice(syncEnabled: false)
+        mac.library.merge(LibraryDocument(computers: [
+            LibraryFixtures.computer("Zulu, on the Mac", id: id, host: "studio.local", modifiedAt: stamp),
+        ]))
+        phone.library.merge(LibraryDocument(computers: [
+            LibraryFixtures.computer("Alpha, on the phone", id: id, host: "studio.local", modifiedAt: stamp),
+        ]))
+        mac.engine.isEnabled = true
+        phone.engine.isEnabled = true
+        cloud.settle()
+
+        let tablet = cloud.addDevice()
+        cloud.settle()
+
+        let name = try #require(mac.library.computer(id)?.name)
+        #expect(phone.library.computer(id)?.name == name)
+        #expect(tablet.library.computer(id)?.name == name)
+        #expect(cloud.hasConverged)
+    }
+
+    /// A change is stamped later than the copy it was made from. When that
+    /// copy came from a device whose clock runs ahead, two devices changing
+    /// it before that time has come both use the very next instant — the
+    /// same one — and the two changes are a tie.
+    @Test(arguments: [false, true])
+    func twoEditsOnTopOfACopyFromAFastClockEndUpTheSameEverywhere(macUploadsFirst: Bool) throws {
+        for names in [("Alpha, set on the Mac", "Zulu, set on the phone"),
+                      ("Zulu, set on the Mac", "Alpha, set on the phone")] {
+            let cloud = SimulatedCloud()
+            let mac = cloud.addDevice(), phone = cloud.addDevice()
+            let ahead = Date.now.addingTimeInterval(300)
+            let studio = LibraryFixtures.computer("Studio", host: "studio.local", modifiedAt: ahead)
+            mac.library.merge(LibraryDocument(computers: [studio]))
+            mac.engine.syncNow()
+            cloud.settle()
+            #expect(phone.library.computer(studio.id)?.modifiedAt == ahead)
+
+            // Neither has heard of the other's edit when it makes its own.
+            mac.library.update(studio.id) { $0.name = names.0 }
+            phone.library.update(studio.id) { $0.name = names.1 }
+            #expect(mac.library.computer(studio.id)?.modifiedAt
+                == phone.library.computer(studio.id)?.modifiedAt)
+            cloud.exchange(uploadOrder: macUploadsFirst ? [mac, phone] : [phone, mac])
+            cloud.settle()
+
+            let name = try #require(mac.library.computer(studio.id)?.name)
+            #expect(names.0 == name || names.1 == name)
+            #expect(phone.library.computer(studio.id)?.name == name)
+            #expect(try phone.store.computer(studio.id)?.name == name)
+            #expect(cloud.hasConverged)
+        }
+    }
+
+    // MARK: - When a computer was last connected to
+
+    @Test func aConnectionMadeOnOneDeviceShowsUpOnTheOthers() throws {
+        let cloud = SimulatedCloud()
+        let mac = cloud.addDevice(), phone = cloud.addDevice()
+        let studio = mac.library.add(computer("Studio"))
+        cloud.settle()
+        #expect(mac.library.recents.isEmpty)
+
+        tick()
+        phone.library.markConnected(studio.id)
+        let connected = try #require(phone.library.computer(studio.id)?.lastConnectedAt)
+        // Connecting is not an edit…
+        #expect(phone.library.computer(studio.id)?.modifiedAt == studio.modifiedAt)
+        // …and still travels: once up, once down, and then nothing more.
+        #expect(cloud.exchange() == 2)
+        #expect(cloud.exchange() == 0)
+
+        #expect(try phone.store.computer(studio.id)?.lastConnectedAt == connected)
+        #expect(mac.library.computer(studio.id)?.lastConnectedAt == connected)
+        #expect(mac.library.recents.map(\.id) == [studio.id])
+        #expect(cloud.hasConverged)
+
+        // An edit made elsewhere afterwards does not make the phone forget.
+        tick()
+        mac.library.update(studio.id) { $0.notes = "edited on the Mac later" }
+        cloud.settle()
+        #expect(phone.library.computer(studio.id)?.notes == "edited on the Mac later")
+        #expect(phone.library.computer(studio.id)?.lastConnectedAt == connected)
+        #expect(cloud.hasConverged)
+    }
+
+    @Test(arguments: [false, true])
+    func connectionsMadeOnTwoDevicesSettleOnTheLaterWithoutGoingBackAndForth(
+        theLaterUploadsFirst: Bool
+    ) throws {
+        let cloud = SimulatedCloud()
+        let mac = cloud.addDevice(), phone = cloud.addDevice()
+        let studio = mac.library.add(computer("Studio"))
+        cloud.settle()
+
+        // Each connects without having heard that the other did.
+        tick()
+        mac.library.markConnected(studio.id)
+        tick()
+        phone.library.markConnected(studio.id)
+        let later = try #require(phone.library.computer(studio.id)?.lastConnectedAt)
+        #expect(try #require(mac.library.computer(studio.id)?.lastConnectedAt) < later)
+
+        // iCloud keeps the upload that arrives last. If that is the earlier
+        // connection, the device with the later one uploads once more; in
+        // no case does either upload a second time after that.
+        cloud.exchange(uploadOrder: theLaterUploadsFirst ? [phone, mac] : [mac, phone])
+        #expect(cloud.settle() <= 1)
+
+        #expect(mac.library.computer(studio.id)?.lastConnectedAt == later)
+        #expect(phone.library.computer(studio.id)?.lastConnectedAt == later)
+        #expect(try mac.store.computer(studio.id)?.lastConnectedAt == later)
+        for _ in 0..<3 {
+            mac.engine.syncNow()
+            phone.engine.syncNow()
+            #expect(cloud.exchange() == 0)
+        }
+        #expect(cloud.hasConverged)
+    }
+
+    @Test func clearingRecentsOnOneDeviceClearsThemOnTheOthers() throws {
+        let cloud = SimulatedCloud()
+        let mac = cloud.addDevice(), phone = cloud.addDevice()
+        let studio = mac.library.add(computer("Studio"))
+        let server = mac.library.add(computer("Server"))
+        cloud.settle()
+        tick()
+        phone.library.markConnected(studio.id)
+        mac.library.markConnected(server.id)
+        cloud.settle()
+        #expect(Set(mac.library.recents.map(\.id)) == [studio.id, server.id])
+        #expect(Set(phone.library.recents.map(\.id)) == [studio.id, server.id])
+
+        tick()
+        mac.library.clearRecents()
+        cloud.settle()
+
+        #expect(mac.library.recents.isEmpty)
+        #expect(phone.library.recents.isEmpty)
+        #expect(try phone.store.computer(studio.id)?.lastConnectedAt == nil)
+
+        // A connection made afterwards counts again, everywhere.
+        tick()
+        phone.library.markConnected(studio.id)
+        cloud.settle()
+        #expect(mac.library.recents.map(\.id) == [studio.id])
+        #expect(cloud.hasConverged)
+    }
+
+    @Test func connectingDoesNotRewriteARecordThatSaysMoreThanThisVersionReads() throws {
+        // The record as a later version of the app wrote it: a field this
+        // version does not know, and a kind it has no name for.
+        let other = SimulatedDevice()
+        let studio = other.library.add(computer("Studio"))
+        let original = try #require(other.store.values[key(studio)])
+        var fields = try #require(
+            try JSONSerialization.jsonObject(with: original) as? [String: Any])
+        fields["somethingNew"] = ["nested": true]
+        fields["kind"] = "mainframe"
+        let extended = try JSONSerialization.data(withJSONObject: fields)
+        var contents = other.store.values
+        contents[key(studio)] = extended
+        let store = InMemoryCloudStore(values: contents)
+        let device = SimulatedDevice(store: store)
+        #expect(device.library.computer(studio.id) != nil)
+        store.forgetOperations()
+
+        // Connecting is remembered here, and is not worth erasing what the
+        // later version stored.
+        tick()
+        device.library.markConnected(studio.id)
+        device.engine.syncNow()
+        #expect(device.library.computer(studio.id)?.lastConnectedAt != nil)
+        #expect(store.operations.isEmpty)
+        #expect(store.values[key(studio)] == extended)
+
+        // A real edit is still uploaded, and takes the connection with it.
+        tick()
+        device.library.update(studio.id) { $0.notes = "edited here" }
+        #expect(try store.computer(studio.id)?.notes == "edited here")
+        #expect(try store.computer(studio.id)?.lastConnectedAt
+            == device.library.computer(studio.id)?.lastConnectedAt)
     }
 
     @Test func devicesConvergeAfterAnyMixOfChangesAndPartialSyncs() throws {
@@ -947,7 +1151,14 @@ struct CloudSyncEngineTests {
                 let computers = library.computers.sorted { $0.name < $1.name }
                 let groups = library.groups.sorted { $0.name < $1.name }
                 counter += 1
-                switch Int.random(in: 0..<10, using: &random) {
+                switch Int.random(in: 0..<13, using: &random) {
+                case 10, 11:
+                    // Not an edit, and has to reach every device all the same.
+                    if let target = computers.randomElement(using: &random) {
+                        library.markConnected(target.id)
+                    }
+                case 12:
+                    library.clearRecents()
                 case 0...2:
                     library.add(computer("Computer \(counter)"))
                 case 3, 4:
@@ -1481,16 +1692,196 @@ struct CloudLibraryLayoutTests {
         #expect(try makePlan(LibraryDocument(computers: [newer]), against: cloud).writes.map(\.key)
             == [.computer(id)])
 
-        // Same instant, different content: two edits that nothing can order.
-        // Uploading ours would only make the other device upload theirs.
-        var conflicting = stored
-        conflicting.name = "Edited at the very same moment"
-        #expect(try makePlan(LibraryDocument(computers: [conflicting]), against: cloud).isEmpty)
-
         var older = stored
         older.name = "Out of date"
         older.modifiedAt = now.addingTimeInterval(-300)
         #expect(try makePlan(LibraryDocument(computers: [older]), against: cloud).isEmpty)
+    }
+
+    @Test func ofTwoCopiesStampedAlikeTheOneThatStandsIsUploaded() throws {
+        let id = UUID()
+        let stored = LibraryFixtures.computer("Stored", id: id, modifiedAt: now.addingTimeInterval(-200))
+        let cloud = try snapshot(of: LibraryDocument(computers: [stored]))
+
+        // Same instant, different content: neither edit is newer. One of the
+        // two stands — the same one whoever compares them — and it is
+        // uploaded unless it is the one the store already has.
+        var early = stored, late = stored
+        early.name = "Aardvark"
+        late.name = "Zebra"
+        let earlyStands = Computer.resolve(stored, early) == early
+        let (standing, yielding) = earlyStands ? (early, late) : (late, early)
+        #expect(Computer.resolve(stored, standing) == standing)
+        #expect(Computer.resolve(stored, yielding) == stored)
+
+        let plan = try makePlan(LibraryDocument(computers: [standing]), against: cloud)
+        #expect(plan.writes.map(\.key) == [.computer(id)])
+        #expect(try CloudCoding.makeDecoder().decode(Computer.self, from: #require(plan.writes.first).data)
+            == standing)
+        #expect(try makePlan(LibraryDocument(computers: [yielding]), against: cloud).isEmpty)
+
+        // The same goes for groups.
+        let group = LibraryFixtures.group("Stored", modifiedAt: now.addingTimeInterval(-200))
+        let groupCloud = try snapshot(of: LibraryDocument(groups: [group]))
+        var first = group, second = group
+        first.name = "Aardvark"
+        second.name = "Zebra"
+        let (groupStanding, groupYielding) =
+            ComputerGroup.resolve(group, first) == first ? (first, second) : (second, first)
+        #expect(try makePlan(LibraryDocument(groups: [groupStanding]), against: groupCloud).writes.map(\.key)
+            == [.group(group.id)])
+        #expect(try makePlan(LibraryDocument(groups: [groupYielding]), against: groupCloud).isEmpty)
+    }
+
+    @Test func aLaterConnectionIsUploadedAndAnEarlierOneIsNot() throws {
+        let id = UUID()
+        var stored = LibraryFixtures.computer("Studio", id: id, modifiedAt: now.addingTimeInterval(-500))
+        stored.lastConnectedAt = now.addingTimeInterval(-200)
+        let cloud = try snapshot(of: LibraryDocument(computers: [stored]))
+        let decoder = CloudCoding.makeDecoder()
+
+        // Connecting does not touch the modification date.
+        var connectedSince = stored
+        connectedSince.lastConnectedAt = now.addingTimeInterval(-100)
+        let plan = try makePlan(LibraryDocument(computers: [connectedSince]), against: cloud)
+        #expect(plan.writes.map(\.key) == [.computer(id)])
+        #expect(try decoder.decode(Computer.self, from: #require(plan.writes.first).data) == connectedSince)
+
+        var connectedBefore = stored
+        connectedBefore.lastConnectedAt = now.addingTimeInterval(-300)
+        #expect(try makePlan(LibraryDocument(computers: [connectedBefore]), against: cloud).isEmpty)
+        var neverConnected = stored
+        neverConnected.lastConnectedAt = nil
+        #expect(try makePlan(LibraryDocument(computers: [neverConnected]), against: cloud).isEmpty)
+
+        // An older copy that knows of a later connection adds the connection
+        // and nothing else: the newer edit in the store stays as it is.
+        var behind = stored
+        behind.name = "Out of date"
+        behind.modifiedAt = now.addingTimeInterval(-900)
+        behind.lastConnectedAt = now.addingTimeInterval(-50)
+        let adding = try makePlan(LibraryDocument(computers: [behind]), against: cloud)
+        var expected = stored
+        expected.lastConnectedAt = behind.lastConnectedAt
+        #expect(try decoder.decode(Computer.self, from: #require(adding.writes.first).data) == expected)
+    }
+
+    /// What keeps devices from uploading over each other for ever: whatever
+    /// two copies settle on, a device holding either of them — or the result
+    /// — finds nothing to write once the store has it.
+    @Test func onceWhatTwoCopiesSettleOnIsInTheStoreNobodyWritesAgain() throws {
+        var random = ReplayableRandom(seed: 5)
+        let stamps = (0..<4).map { now.addingTimeInterval(Double($0) * -100) }
+        func moment() -> Date? {
+            random.chance(0.25) ? nil : now.addingTimeInterval(.random(in: -450...50, using: &random))
+        }
+        for _ in 0..<400 {
+            let id = UUID()
+            func copy() -> Computer {
+                var computer = LibraryFixtures.computer(
+                    random.chance(0.5) ? "Studio" : "Server", id: id, host: "studio.local",
+                    modifiedAt: stamps.randomElement(using: &random)!)
+                computer.createdAt = stamps[3]
+                computer.lastConnectedAt = moment()
+                computer.connectionsClearedAt = moment()
+                return computer
+            }
+            let a = copy(), b = copy()
+            let settled = Computer.resolve(a, b)
+
+            // The device holding `b` finds `a` in the store.
+            let wanted = LibraryDocument.merge(
+                LibraryDocument(computers: [b]), LibraryDocument(computers: [a]), now: now)
+            let plan = try makePlan(wanted, against: snapshot(of: LibraryDocument(computers: [a])))
+            if let write = plan.writes.first {
+                #expect(try CloudCoding.makeDecoder().decode(Computer.self, from: write.data) == settled)
+            } else {
+                #expect(settled == a)
+            }
+
+            // With that in the store, nobody has anything to add.
+            let store = try snapshot(of: LibraryDocument(computers: [settled]))
+            for held in [a, b, settled] {
+                #expect(try makePlan(LibraryDocument(computers: [held]), against: store).isEmpty)
+            }
+        }
+    }
+
+    @Test func aRecordThatSaysMoreThanThisVersionReadsIsNotRewrittenToAddAConnection() throws {
+        let id = UUID()
+        let stored = LibraryFixtures.computer("Studio", id: id, modifiedAt: now.addingTimeInterval(-500))
+        let plain = try CloudCoding.makeEncoder().encode(stored)
+        var fields = try #require(try JSONSerialization.jsonObject(with: plain) as? [String: Any])
+
+        func cloud(holding fields: [String: Any]) throws -> CloudSnapshot {
+            let store = InMemoryCloudStore()
+            store.set(try JSONSerialization.data(withJSONObject: fields), forKey: "c.\(id.uuidString)")
+            store.set(Data(#"{"schemaVersion":1}"#.utf8), forKey: "meta")
+            var reader = CloudReader()
+            return reader.read(store)
+        }
+        var connected = stored
+        connected.lastConnectedAt = now.addingTimeInterval(-100)
+
+        // Written by this version, only formatted differently: it goes up.
+        #expect(try makePlan(LibraryDocument(computers: [connected]), against: cloud(holding: fields))
+            .writes.map(\.key) == [.computer(id)])
+
+        // Written by an earlier version that did not have every field: the
+        // rewrite loses nothing, so it goes up as well.
+        var fewer = fields
+        fewer["notes"] = nil
+        fewer["tags"] = nil
+        #expect(try makePlan(LibraryDocument(computers: [connected]), against: cloud(holding: fewer))
+            .writes.map(\.key) == [.computer(id)])
+
+        // A field this version does not know, at the top or further in, or a
+        // value it reads as something else: left alone.
+        fields["somethingNew"] = 1
+        #expect(try makePlan(LibraryDocument(computers: [connected]), against: cloud(holding: fields)).isEmpty)
+        fields["somethingNew"] = nil
+        var settings = try #require(fields["settings"] as? [String: Any])
+        settings["somethingNew"] = "x"
+        fields["settings"] = settings
+        #expect(try makePlan(LibraryDocument(computers: [connected]), against: cloud(holding: fields)).isEmpty)
+        settings["somethingNew"] = nil
+        settings["quality"] = "holographic"
+        fields["settings"] = settings
+        // `connected` is the record as this version reads it, plus the connection.
+        var asRead = connected
+        asRead.settings.quality = .standard
+        #expect(try makePlan(LibraryDocument(computers: [asRead]), against: cloud(holding: fields)).isEmpty)
+
+        // An edit is another matter: it is uploaded whatever the store says.
+        var edited = asRead
+        edited.notes = "edited here"
+        edited.modifiedAt = now.addingTimeInterval(-50)
+        #expect(try makePlan(LibraryDocument(computers: [edited]), against: cloud(holding: fields))
+            .writes.map(\.key) == [.computer(id)])
+    }
+
+    @Test func rewritingIsJudgedByWhatAValueSaysNotByItsBytes() throws {
+        func keeps(_ stored: String, _ rewritten: String) -> Bool {
+            CloudCoding.keepsEverything(in: Data(stored.utf8), whenWrittenAs: Data(rewritten.utf8))
+        }
+        #expect(keeps(#"{"a":1,"b":"x"}"#, #"{"a":1,"b":"x"}"#))
+        // Order, spacing and the spelling of a number do not matter.
+        #expect(keeps(#"{"b":"x", "a":1.0}"#, #"{"a":1,"b":"x"}"#))
+        #expect(keeps(#"{"a":8.5e2}"#, #"{"a":850}"#))
+        // Saying more is fine; saying less, or something else, is not.
+        #expect(keeps(#"{"a":1}"#, #"{"a":1,"b":"x"}"#))
+        #expect(!keeps(#"{"a":1,"b":"x"}"#, #"{"a":1}"#))
+        #expect(!keeps(#"{"a":1}"#, #"{"a":2}"#))
+        #expect(!keeps(#"{"a":"mainframe"}"#, #"{"a":"other"}"#))
+        #expect(!keeps(#"{"a":null}"#, #"{"a":0}"#))
+        // All the way down.
+        #expect(keeps(#"{"a":{"b":[1,{"c":true}]}}"#, #"{"a":{"b":[1,{"c":true,"d":2}],"e":0}}"#))
+        #expect(!keeps(#"{"a":{"b":[1,{"c":true,"x":0}]}}"#, #"{"a":{"b":[1,{"c":true}]}}"#))
+        #expect(!keeps(#"{"a":[1,2,3]}"#, #"{"a":[1,2]}"#))
+        #expect(!keeps(#"{"a":{"b":1}}"#, #"{"a":[1]}"#))
+        // Something that is not JSON says nothing that could be kept.
+        #expect(!keeps("{ not json", #"{"a":1}"#))
+        #expect(!keeps(#"{"a":1}"#, ""))
     }
 
     @Test func itemsDeletedFromTheLibraryAreRemovedAndTheirDeletionRecorded() throws {

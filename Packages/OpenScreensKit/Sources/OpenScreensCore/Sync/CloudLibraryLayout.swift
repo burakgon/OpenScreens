@@ -94,6 +94,36 @@ enum CloudCoding {
             positiveInfinity: "inf", negativeInfinity: "-inf", nan: "nan")
         return decoder
     }
+
+    /// Whether `rewritten` still says everything `stored` says.
+    ///
+    /// Both are JSON. Every key in `stored` has to be in `rewritten` with the
+    /// same value; `rewritten` may say more. A record written by a later
+    /// version of the app does not pass this against what this version would
+    /// write in its place: fields this version does not know are dropped when
+    /// it decodes the record, and values it does not know become defaults.
+    static func keepsEverything(in stored: Data, whenWrittenAs rewritten: Data) -> Bool {
+        if stored == rewritten { return true }
+        guard let old = try? JSONSerialization.jsonObject(with: stored, options: .fragmentsAllowed),
+              let new = try? JSONSerialization.jsonObject(with: rewritten, options: .fragmentsAllowed)
+        else { return false }
+        return covers(new, everythingIn: old)
+    }
+
+    private static func covers(_ new: Any, everythingIn old: Any) -> Bool {
+        if let old = old as? [String: Any] {
+            guard let new = new as? [String: Any] else { return false }
+            return old.allSatisfy { key, value in
+                new[key].map { covers($0, everythingIn: value) } ?? false
+            }
+        }
+        if let old = old as? [Any] {
+            guard let new = new as? [Any], new.count == old.count else { return false }
+            return zip(new, old).allSatisfy { covers($0, everythingIn: $1) }
+        }
+        // Strings, numbers, booleans and null.
+        return (old as AnyObject).isEqual(new)
+    }
 }
 
 // MARK: - Reading
@@ -267,31 +297,57 @@ struct CloudSyncPlan: Sendable {
             try stage(CloudMetadata(schemaVersion: schemaVersion), at: .metadata)
         }
 
-        // An item is uploaded when the cloud has no readable copy of it or
-        // has an older one. A copy with the same timestamp is left alone even
-        // if its bytes differ: that is either the same item as written by
-        // another version of the app, whose extra fields a rewrite would
-        // erase, or two edits stamped with the same instant, where rewriting
-        // would make the two devices overwrite each other for ever.
+        // An item the cloud has no readable copy of is uploaded. For one it
+        // has, what goes up is what the two copies settle on —
+        // ``Computer/resolve(_:_:)`` and ``ComputerGroup/resolve(_:_:)``: the
+        // later edit; when neither is later, the one every device picks; and
+        // for a computer the record of connections taken from both — unless
+        // the cloud already holds exactly that.
+        //
+        // Every device arrives at the same result from whichever of the
+        // copies it has, so once that result is in the cloud nobody has
+        // anything left to write. Devices that held different copies end up
+        // with one, without overwriting each other back and forth.
+        //
+        // Items are compared as this version reads them, not byte for byte:
+        // the same item as written by another version of the app is left
+        // alone, with whatever else that version stored in it.
         //
         // Groups are written before the computers that refer to them, so a
         // device that receives only the first part of an upload never sees a
         // computer pointing at a group it has not heard of.
         let groups = Self.newest(desired.groups, modifiedAt: \.modifiedAt)
         for group in groups {
-            if let existing = cloud.groups[group.id], existing.modifiedAt >= group.modifiedAt {
+            let key = CloudKey.group(group.id)
+            guard let existing = cloud.groups[group.id] else {
+                try stage(group, at: key)
                 continue
             }
-            try stage(group, at: .group(group.id))
+            let settled = ComputerGroup.resolve(existing, group)
+            if settled != existing {
+                try stage(settled, at: key)
+            }
         }
 
         let computers = Self.newest(desired.computers, modifiedAt: \.modifiedAt)
         for computer in computers {
-            if let existing = cloud.computers[computer.id],
-               existing.modifiedAt >= computer.modifiedAt {
+            let key = CloudKey.computer(computer.id)
+            guard let existing = cloud.computers[computer.id] else {
+                try stage(computer, at: key)
                 continue
             }
-            try stage(computer, at: .computer(computer.id))
+            let settled = Computer.resolve(existing, computer)
+            guard settled != existing else { continue }
+            // Connecting is not an edit. A record that says more than this
+            // version reads came from a later one, and writing it again
+            // would erase the rest — too much to pay for adding when this
+            // device last connected.
+            if Self.differOnlyInConnections(settled, existing),
+               let stored = cloud.values[key],
+               !CloudCoding.keepsEverything(in: stored, whenWrittenAs: try encoder.encode(existing)) {
+                continue
+            }
+            try stage(settled, at: key)
         }
 
         // Deletions, minus the ones that have been remembered long enough.
@@ -374,6 +430,17 @@ struct CloudSyncPlan: Sendable {
             return .totalBytes(needed: projectedByteCount, limit: limits.maximumTotalBytes)
         }
         return nil
+    }
+
+    /// Whether two copies of a computer differ in nothing but when it was
+    /// last connected to and when that record was last cleared.
+    private static func differOnlyInConnections(_ a: Computer, _ b: Computer) -> Bool {
+        var (a, b) = (a, b)
+        for field in [\Computer.lastConnectedAt, \Computer.connectionsClearedAt] {
+            a[keyPath: field] = nil
+            b[keyPath: field] = nil
+        }
+        return a == b
     }
 
     /// One entry per ID, in document order. A well-formed library never has

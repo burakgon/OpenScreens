@@ -29,7 +29,10 @@ import Observation
 ///   sent back as if it had been edited here.
 /// - **Pushing** uploads items the store has no copy of or an older copy of,
 ///   records deletions, removes the keys of deleted items, and forgets
-///   deletions older than ``LibraryDocument/tombstoneLifetime``.
+///   deletions older than ``LibraryDocument/tombstoneLifetime``. Where the
+///   store's copy and the library's are equally recent but differ — the same
+///   computer connected to from two devices, or two edits stamped alike — it
+///   uploads what the two settle on, which is the same on every device.
 ///
 /// Turning sync on, an announcement from the store that another device
 /// changed something, and ``syncNow()`` each pull and then push. A local
