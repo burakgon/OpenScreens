@@ -1042,7 +1042,7 @@ public final class RemoteSession: Identifiable {
         case .allCombined: .allDisplaysCombined
         case .twoVirtual: .twoVirtualDisplays
         }
-        return VNCConfiguration(
+        var configuration = VNCConfiguration(
             preferredPixelFormat: settings.colorDepth == .thousands ? .rgb555 : nil,
             videoQualityMode: quality,
             displaySizingMode: settings.resolution == .matchWindow ? .matchClient : .remoteDisplay,
@@ -1054,6 +1054,9 @@ public final class RemoteSession: Identifiable {
             remoteSystem: .automatic,
             targetFrameRate: settings.frameRate,
             reconnectionPolicy: VNCReconnectionPolicy(isEnabled: settings.reconnectAutomatically))
+        // What the remote Mac lists the displays it creates as.
+        configuration.virtualDisplayName = "OpenScreens Display"
+        return configuration
     }
 
     private static func authenticationMessage(_ reason: String) -> String {
