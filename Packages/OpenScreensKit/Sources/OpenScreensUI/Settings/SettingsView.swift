@@ -6,31 +6,51 @@ import UniformTypeIdentifiers
 /// iPhone and iPad — the panes themselves are shared.
 public struct SettingsView: View {
     @Environment(AppModel.self) private var model
+    #if os(macOS)
+    @State private var pane = SettingsView.initialPane
+    #endif
 
     public init() {}
 
+    #if os(macOS)
+    /// The panes of the Mac's Settings window.
+    enum Pane: String, Hashable {
+        case general, connections, shortcuts, tailscale, sshKeys, privacy, about
+    }
+
+    private static var initialPane: Pane {
+        #if DEBUG
+        // Lets a scripted launch open Settings on a given pane.
+        if let requested = ProcessInfo.processInfo.environment["OPENSCREENS_SETTINGS"].flatMap(Pane.init(rawValue:)) {
+            return requested
+        }
+        #endif
+        return .general
+    }
+    #endif
+
     public var body: some View {
         #if os(macOS)
-        TabView {
-            Tab("General", systemImage: "gearshape") {
+        TabView(selection: $pane) {
+            Tab("General", systemImage: "gearshape", value: Pane.general) {
                 GeneralSettingsPane()
             }
-            Tab("Connections", systemImage: "slider.horizontal.3") {
+            Tab("Connections", systemImage: "slider.horizontal.3", value: Pane.connections) {
                 DefaultConnectionPane()
             }
-            Tab("Shortcuts", systemImage: "command") {
+            Tab("Shortcuts", systemImage: "command", value: Pane.shortcuts) {
                 ShortcutsSettingsPane()
             }
-            Tab("Tailscale", systemImage: "point.3.connected.trianglepath.dotted") {
+            Tab("Tailscale", systemImage: "point.3.connected.trianglepath.dotted", value: Pane.tailscale) {
                 TailscaleSettingsPane()
             }
-            Tab("SSH Keys", systemImage: "key") {
+            Tab("SSH Keys", systemImage: "key", value: Pane.sshKeys) {
                 SSHKeysSettingsPane()
             }
-            Tab("Privacy", systemImage: "hand.raised") {
+            Tab("Privacy", systemImage: "hand.raised", value: Pane.privacy) {
                 PrivacySettingsPane()
             }
-            Tab("About", systemImage: "info.circle") {
+            Tab("About", systemImage: "info.circle", value: Pane.about) {
                 AboutPane()
             }
         }

@@ -7,6 +7,7 @@ public struct LibraryView: View {
     @Environment(\.horizontalSizeClass) private var sizeClass
     #if os(macOS)
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.openSettings) private var openSettings
     #endif
 
     @State private var filter: LibraryFilter? = .all
@@ -84,6 +85,11 @@ public struct LibraryView: View {
             }
             DebugAutomation.runIfRequested(model: model) { present($0) }
             DebugAutomation.runFilesIfRequested(model: model) { browseFiles(on: $0) }
+            #if os(macOS)
+            if ProcessInfo.processInfo.environment["OPENSCREENS_SETTINGS"] != nil {
+                openSettings()
+            }
+            #endif
         }
         #endif
         #if os(iOS)
