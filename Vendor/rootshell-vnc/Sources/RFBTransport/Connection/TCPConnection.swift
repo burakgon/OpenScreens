@@ -181,10 +181,14 @@ public actor TCPConnection: RFBConnection {
         }
     }
 
+    /// Reported when the peer actively refuses the connection.
+    static let refusedError = VNCProtocolError.ioError("Connection refused")
+
     private func dialOnce() async throws {
         let handler = InboundByteStreamHandler { [weak self] error in
             Task { await self?.notifyUnexpectedDisconnect(error) }
         }
+        let refusal = ConnectionRefusalHandler()
         let tcpOptions = NWProtocolTCP.Options()
         tcpOptions.noDelay = true
         tcpOptions.enableKeepalive = true
@@ -206,7 +210,9 @@ public actor TCPConnection: RFBConnection {
                 parameters.serviceClass = .responsiveData
             }
             .channelInitializer { channel in
-                channel.pipeline.addHandler(handler)
+                channel.pipeline.addHandler(refusal).flatMap {
+                    channel.pipeline.addHandler(handler)
+                }
             }
 
         log.info("Connecting to \(host):\(port)")
@@ -235,8 +241,10 @@ public actor TCPConnection: RFBConnection {
             // otherwise only inferable from the media path's own log line.
             log.info("Selected peer \(peerDescription) over \(pathDescription)")
         } catch {
-            let protocolError = VNCProtocolError.ioError(
-                "Connection failed: \(error.localizedDescription)")
+            let protocolError = refusal.wasRefused
+                ? Self.refusedError
+                : VNCProtocolError.ioError(
+                    "Connection failed: \(error.localizedDescription)")
             handler.finish(throwing: protocolError)
             throw protocolError
         }
@@ -740,5 +748,38 @@ private final class SendableSSLHandler: @unchecked Sendable {
 
     init(_ value: NIOSSLClientHandler) {
         self.value = value
+    }
+}
+
+/// Notices when a dial is actively refused.
+///
+/// Network.framework parks a refused connection in its waiting state in case
+/// the path changes, so the bootstrap would otherwise sit out the whole
+/// connect timeout before reporting anything. This closes the channel as soon
+/// as the refusal arrives and remembers why, which lets `connect()` move on
+/// to its next attempt at once and name the reason if they all fail.
+private final class ConnectionRefusalHandler: ChannelInboundHandler, @unchecked Sendable {
+    typealias InboundIn = ByteBuffer
+
+    private let lock = NSLock()
+    private var refused = false
+
+    var wasRefused: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return refused
+    }
+
+    func userInboundEventTriggered(context: ChannelHandlerContext, event: Any) {
+        if let waiting = event as? NIOTSNetworkEvents.WaitingForConnectivity,
+           case .posix(let code) = waiting.transientError,
+           code == .ECONNREFUSED {
+            lock.lock()
+            refused = true
+            lock.unlock()
+            context.close(promise: nil)
+            return
+        }
+        context.fireUserInboundEventTriggered(event)
     }
 }
