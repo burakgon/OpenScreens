@@ -541,10 +541,13 @@ public final class RemoteSession: Identifiable {
     /// Closes the connection. The session cannot be reused afterwards.
     public func end() {
         guard !hasEnded else { return }
+        var lock: (press: [KeyTransition], release: [KeyTransition])?
         if isConnected {
             savePreviewIfWanted()
+            // Nothing may stay held on the other side.
+            releaseHardwareKeys()
             if settings.lockOnDisconnect, canSendInput, computer.kind.isApple {
-                send(RemoteShortcut(name: "Lock Screen", modifiers: [.control, .command], key: .character("q")))
+                lock = combination(keysym: Keysym.character("q"), modifiers: [.control, .command])
             }
         }
         hasEnded = true
@@ -553,7 +556,21 @@ public final class RemoteSession: Identifiable {
         statisticsTask?.cancel()
         statisticsTask = nil
         clipboard.invalidate()
-        engine.disconnect()
+
+        guard let lock else {
+            engine.disconnect()
+            return
+        }
+        // Control-Command-Q locks a Mac. The keys are queued behind whatever
+        // else is on its way out, so the connection is kept just long enough
+        // for the Mac to see the shortcut pressed and let go.
+        emit(lock.press)
+        Task {
+            try? await Task.sleep(for: .milliseconds(120))
+            self.emit(lock.release)
+            try? await Task.sleep(for: .milliseconds(350))
+            self.engine.disconnect()
+        }
     }
 
     private func observeEngine() {
