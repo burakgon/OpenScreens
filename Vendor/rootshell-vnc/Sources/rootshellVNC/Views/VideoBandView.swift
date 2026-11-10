@@ -4,6 +4,7 @@ import CoreMedia
 import CoreImage
 import QuartzCore
 import AVFoundation
+import VideoToolbox
 import RFBTransport
 
 /// GPU renderer for Apple's high-performance HEVC screen bands.
@@ -319,6 +320,15 @@ public final class VideoBandLayerRenderer {
                 Unmanaged.passUnretained(kCFBooleanTrue).toOpaque())
         }
         return sampleBuffer
+    }
+
+    /// The frame currently on screen as an image, for screenshots and
+    /// previews. Nil until the first frame of a stream has been presented.
+    public func snapshotImage() -> CGImage? {
+        guard let displayedBuffer else { return nil }
+        var image: CGImage?
+        VTCreateCGImageFromCVPixelBuffer(displayedBuffer, options: nil, imageOut: &image)
+        return image
     }
 
     /// The host view's bounds. Drives aspect-fit layout.

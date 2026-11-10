@@ -2312,6 +2312,23 @@ public final class VNCSession {
         }
     }
 
+    /// The remote screen as currently presented, for screenshots and previews.
+    ///
+    /// Standard connections return the framebuffer cropped to the selected
+    /// display. High Performance connections return the primary display's
+    /// most recent video frame. Nil until a first picture has arrived.
+    public func snapshotImage() -> CGImage? {
+        if isHighPerformanceMode {
+            return videoBandRenderer.snapshotImage()
+        }
+        guard let image = currentImage else { return nil }
+        guard let region = presentedFramebufferRegion else { return image }
+        let bounds = CGRect(x: 0, y: 0, width: image.width, height: image.height)
+        let crop = region.integral.intersection(bounds)
+        guard !crop.isEmpty, crop != bounds else { return image }
+        return image.cropping(to: crop) ?? image
+    }
+
     /// Selected framebuffer rectangle in the server's normalized desktop
     /// coordinates. Nil means the server has not described its monitor layout.
     public var presentedFramebufferRegion: CGRect? {
