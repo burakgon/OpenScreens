@@ -11,6 +11,7 @@ struct SessionToolbar: ToolbarContent {
 
     @State private var showsCurtainPrompt = false
     @State private var showsInspector = false
+    @State private var showsTypeText = false
 
     private var isLive: Bool { session.isConnected }
 
@@ -64,6 +65,10 @@ struct SessionToolbar: ToolbarContent {
                         showsCurtainPrompt = true
                     }
                 }
+                Button("Type Text…", systemImage: "text.cursor") {
+                    showsTypeText = true
+                }
+                .disabled(!session.canSendInput)
                 Divider()
                 @Bindable var settings = model.settings
                 Toggle(isOn: $settings.showsStatisticsOverlay) {
@@ -83,6 +88,9 @@ struct SessionToolbar: ToolbarContent {
             .curtainPrompt(for: session, isPresented: $showsCurtainPrompt)
             .sheet(isPresented: $showsInspector) {
                 SessionSettingsSheet(session: session)
+            }
+            .sheet(isPresented: $showsTypeText) {
+                TypeTextSheet(session: session)
             }
         }
     }

@@ -4,6 +4,7 @@ import SwiftUI
 /// The library: every saved computer, organised by the sidebar.
 public struct LibraryView: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.horizontalSizeClass) private var sizeClass
     #if os(macOS)
     @Environment(\.openWindow) private var openWindow
     #endif
@@ -17,6 +18,7 @@ public struct LibraryView: View {
     @State private var showsDeleteConfirmation = false
     #if os(iOS)
     @State private var presentedSession: RemoteSession?
+    @State private var showsSettings = false
     #endif
 
     public init() {}
@@ -64,10 +66,21 @@ public struct LibraryView: View {
         }
         .environment(\.libraryActions, actions)
         .onOpenURL { url in
-            if let target = ConnectionTarget(url: url) {
-                connect(to: target)
+            if let link = AppLink(url: url) {
+                open(link)
             }
         }
+        .onChange(of: model.pendingLink, initial: true) { _, link in
+            guard let link else { return }
+            model.pendingLink = nil
+            open(link)
+        }
+        #if DEBUG
+        .task {
+            DebugSampleData.seedIfRequested(model: model)
+            DebugAutomation.runIfRequested(model: model) { present($0) }
+        }
+        #endif
         #if os(iOS)
         .fullScreenCover(item: $presentedSession) { session in
             SessionScreen(session: session) {
@@ -75,6 +88,10 @@ public struct LibraryView: View {
                 presentedSession = nil
             }
             .environment(model)
+        }
+        .sheet(isPresented: $showsSettings) {
+            SettingsView()
+                .environment(model)
         }
         #endif
     }
@@ -118,10 +135,7 @@ public struct LibraryView: View {
 
     private func grid(_ computers: [Computer]) -> some View {
         ScrollView {
-            LazyVGrid(
-                columns: [GridItem(.adaptive(minimum: 210, maximum: 340), spacing: 12)],
-                spacing: 12
-            ) {
+            LazyVGrid(columns: gridColumns, spacing: 12) {
                 ForEach(computers) { computer in
                     ComputerCard(computer: computer, isSelected: selection.contains(computer.id))
                         #if os(macOS)
@@ -156,6 +170,13 @@ public struct LibraryView: View {
             requestDeletion(selection)
         }
         #endif
+    }
+
+    /// Two columns on a phone, as many as fit comfortably everywhere else.
+    private var gridColumns: [GridItem] {
+        sizeClass == .compact
+            ? [GridItem(.adaptive(minimum: 150, maximum: 260), spacing: 10)]
+            : [GridItem(.adaptive(minimum: 210, maximum: 340), spacing: 12)]
     }
 
     private func list(_ computers: [Computer]) -> some View {
@@ -224,6 +245,14 @@ public struct LibraryView: View {
             }
             .help("Add a computer to the library")
         }
+
+        #if os(iOS)
+        ToolbarItem(placement: .topBarLeading) {
+            Button("Settings", systemImage: "gearshape") {
+                showsSettings = true
+            }
+        }
+        #endif
 
         ToolbarItem(placement: .secondaryAction) {
             @Bindable var settings = model.settings
@@ -303,6 +332,17 @@ public struct LibraryView: View {
         present(model.sessions.open(target))
     }
 
+    private func open(_ link: AppLink) {
+        switch link {
+        case .computer(let id):
+            if let computer = model.library.computer(id) {
+                connect(to: computer)
+            }
+        case .target(let target):
+            connect(to: target)
+        }
+    }
+
     private func present(_ session: RemoteSession) {
         #if os(macOS)
         openWindow(id: WindowID.session, value: session.id)
@@ -342,16 +382,23 @@ private struct EmptyLibraryView: View {
             VStack(spacing: 8) {
                 Text("Welcome to OpenScreens")
                     .font(.largeTitle.weight(.semibold))
-                Text("Control your Mac, PC or Raspberry Pi from anywhere.\nAdd a computer to get started.")
+                    .multilineTextAlignment(.center)
+                    .minimumScaleFactor(0.7)
+                    .lineLimit(1)
+                Text("Control your Mac, PC or Raspberry Pi from anywhere. Add a computer to get started.")
                     .font(.title3)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
             }
-            HStack(spacing: 12) {
-                Button("Quick Connect", systemImage: "bolt", action: onQuickConnect)
-                    .buttonStyle(.glass)
-                Button("Add Computer", systemImage: "plus", action: onAdd)
-                    .buttonStyle(.glassProminent)
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 12) {
+                    quickConnectButton
+                    addButton
+                }
+                VStack(spacing: 10) {
+                    addButton
+                    quickConnectButton
+                }
             }
             .controlSize(.large)
 
@@ -365,6 +412,24 @@ private struct EmptyLibraryView: View {
         }
         .padding(32)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var quickConnectButton: some View {
+        Button(action: onQuickConnect) {
+            Label("Quick Connect", systemImage: "bolt")
+                .lineLimit(1)
+                .fixedSize()
+        }
+        .buttonStyle(.glass)
+    }
+
+    private var addButton: some View {
+        Button(action: onAdd) {
+            Label("Add Computer", systemImage: "plus")
+                .lineLimit(1)
+                .fixedSize()
+        }
+        .buttonStyle(.glassProminent)
     }
 
     private func tip(_ symbol: String, _ text: String) -> some View {

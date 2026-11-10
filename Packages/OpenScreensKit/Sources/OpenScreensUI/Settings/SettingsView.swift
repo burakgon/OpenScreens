@@ -95,6 +95,9 @@ struct GeneralSettingsPane: View {
                     }
                 }
                 Toggle("Show Nearby Computers", isOn: $settings.showsNearbyComputers)
+                #if os(macOS)
+                Toggle("Show OpenScreens in the Menu Bar", isOn: $settings.showsMenuBarItem)
+                #endif
             }
 
             Section {

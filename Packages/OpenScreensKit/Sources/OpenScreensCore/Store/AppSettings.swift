@@ -52,6 +52,11 @@ public final class AppSettings {
         didSet { defaults.set(hapticFeedback, forKey: Key.haptics) }
     }
 
+    /// Show a menu bar item on the Mac for connecting without the library.
+    public var showsMenuBarItem: Bool {
+        didSet { defaults.set(showsMenuBarItem, forKey: Key.menuBarItem) }
+    }
+
     /// Buttons shown on the session toolbar, in order.
     public var toolbarItems: [ToolbarItemKind] {
         didSet { defaults.set(toolbarItems.map(\.rawValue), forKey: Key.toolbarItems) }
@@ -103,6 +108,7 @@ public final class AppSettings {
         keepsDisplayAwake = defaults.object(forKey: Key.keepsAwake) as? Bool ?? true
         confirmsDisconnect = defaults.bool(forKey: Key.confirmsDisconnect)
         hapticFeedback = defaults.object(forKey: Key.haptics) as? Bool ?? true
+        showsMenuBarItem = defaults.bool(forKey: Key.menuBarItem)
         toolbarItems = (defaults.stringArray(forKey: Key.toolbarItems))?
             .compactMap(ToolbarItemKind.init(rawValue:)) ?? ToolbarItemKind.defaultItems
         customShortcuts = Self.readCodable(defaults, Key.customShortcuts) ?? []
@@ -128,6 +134,7 @@ public final class AppSettings {
         keepsDisplayAwake = fresh.keepsDisplayAwake
         confirmsDisconnect = fresh.confirmsDisconnect
         hapticFeedback = fresh.hapticFeedback
+        showsMenuBarItem = fresh.showsMenuBarItem
         toolbarItems = fresh.toolbarItems
         customShortcuts = fresh.customShortcuts
         requiresAuthentication = fresh.requiresAuthentication
@@ -155,6 +162,7 @@ public final class AppSettings {
         static let keepsAwake = "keepsDisplayAwake"
         static let confirmsDisconnect = "confirmsDisconnect"
         static let haptics = "hapticFeedback"
+        static let menuBarItem = "showsMenuBarItem"
         static let toolbarItems = "toolbarItems"
         static let customShortcuts = "customShortcuts"
         static let requiresAuthentication = "requiresAuthentication"
@@ -167,7 +175,7 @@ public final class AppSettings {
             defaultConnection, libraryLayout, librarySort, showsNearby, savesPreviews,
             showsStatistics, keepsAwake, confirmsDisconnect, haptics, toolbarItems,
             customShortcuts, requiresAuthentication, syncsWithICloud, tailscaleEnabled,
-            tailnet, hidesOfflineTailscale,
+            tailnet, hidesOfflineTailscale, menuBarItem,
         ]
     }
 }

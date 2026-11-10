@@ -36,11 +36,41 @@ targets:
       - package: OpenScreensKit
         product: OpenScreensCore
 
+  OpenScreens iOS:
+    type: application
+    platform: iOS
+    sources:
+      - path: Apps/iOS
+      - path: Apps/Shared
+    settings:
+      base:
+        PRODUCT_NAME: OpenScreens
+        PRODUCT_BUNDLE_IDENTIFIER: $(OPENSCREENS_BUNDLE_ID)
+        INFOPLIST_FILE: Apps/iOS/Info.plist
+        CODE_SIGN_ENTITLEMENTS: Apps/iOS/OpenScreens.entitlements
+        TARGETED_DEVICE_FAMILY: "1,2"
+        SUPPORTS_MACCATALYST: NO
+        SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD: NO
+        SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD: NO
+    dependencies:
+      - package: OpenScreensKit
+        product: OpenScreensUI
+      - package: OpenScreensKit
+        product: OpenScreensCore
+
 schemes:
   OpenScreens:
     build:
       targets:
         OpenScreens: all
+    run:
+      config: Debug
+    archive:
+      config: Release
+  OpenScreens iOS:
+    build:
+      targets:
+        OpenScreens iOS: all
     run:
       config: Debug
     archive:

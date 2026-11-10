@@ -48,6 +48,11 @@ public final class RemoteSession: Identifiable {
     /// Zoom and pan state, shared between the canvas and the toolbar.
     public var viewport = Viewport()
 
+    #if os(iOS)
+    /// Connects this session's SwiftUI chrome with its UIKit canvas.
+    public let canvasBridge = CanvasBridge()
+    #endif
+
     /// Modifier keys latched from the toolbar, applied to the next key.
     public var latchedModifiers: KeyModifiers = []
     /// Latched modifiers stay down until tapped again instead of releasing
@@ -56,6 +61,14 @@ public final class RemoteSession: Identifiable {
 
     public private(set) var statistics: SessionStatistics?
     public private(set) var connectedAt: Date?
+
+    /// Incremented to ask the canvas to take keyboard focus back, for example
+    /// after a sheet that was typing into a local field has closed.
+    public private(set) var focusRequests = 0
+
+    public func requestKeyboardFocus() {
+        focusRequests += 1
+    }
 
     /// The mode the user asked for, kept so a session that fell back to
     /// Standard can say so.
@@ -188,6 +201,9 @@ public final class RemoteSession: Identifiable {
     public var canSendInput: Bool {
         isConnected && !settings.observeOnly
     }
+
+    /// Whether gestures should be acknowledged with haptic taps.
+    public var hapticsEnabled: Bool { appSettings.hapticFeedback }
 
     // MARK: - Connecting
 

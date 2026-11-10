@@ -43,6 +43,68 @@ public struct OpenScreensScenes: Scene {
             SettingsView()
                 .environment(model)
         }
+
+        MenuBarExtra(
+            "OpenScreens",
+            systemImage: "macbook.and.iphone",
+            isInserted: Binding(
+                get: { model.settings.showsMenuBarItem },
+                set: { model.settings.showsMenuBarItem = $0 })
+        ) {
+            MenuBarContent()
+                .environment(model)
+        }
+    }
+}
+
+/// The menu bar item: favourites and recents, one click from anywhere.
+private struct MenuBarContent: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        let favorites = model.library.favorites
+        let recents = model.library.recents.filter { !$0.isFavorite }.prefix(6)
+
+        if favorites.isEmpty, recents.isEmpty {
+            Text("No Favorites or Recent Computers")
+        }
+        if !favorites.isEmpty {
+            Section("Favorites") {
+                ForEach(favorites) { computer in
+                    button(for: computer)
+                }
+            }
+        }
+        if !recents.isEmpty {
+            Section("Recents") {
+                ForEach(Array(recents)) { computer in
+                    button(for: computer)
+                }
+            }
+        }
+        Divider()
+        Button("Show Library") {
+            openWindow(id: WindowID.library)
+            NSApp.activate()
+        }
+        SettingsLink {
+            Text("Settings…")
+        }
+        Divider()
+        Button("Quit OpenScreens") {
+            NSApp.terminate(nil)
+        }
+    }
+
+    private func button(for computer: Computer) -> some View {
+        Button {
+            let session = model.sessions.open(computer)
+            openWindow(id: WindowID.session, value: session.id)
+            NSApp.activate()
+        } label: {
+            Label(computer.displayName, systemImage: computer.kind.symbolName)
+        }
     }
 }
 

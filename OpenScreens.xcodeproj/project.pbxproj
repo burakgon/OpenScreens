@@ -7,9 +7,15 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		055BCA920FB31C33DCD7C48F /* OpenScreensApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E7349B5B05A9A64AABCEBCF /* OpenScreensApp.swift */; };
+		122D16FCC4730D4F758C39A2 /* ConnectIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEC6DFC7177B27E13751098A /* ConnectIntent.swift */; };
+		18451E96E6328CCD5664589F /* OpenScreensUI in Frameworks */ = {isa = PBXBuildFile; productRef = 1D356AC75D4B187F24937B11 /* OpenScreensUI */; };
 		33C31112E4BF4D10A0EB1D18 /* OpenScreensUI in Frameworks */ = {isa = PBXBuildFile; productRef = 6CBFB62E94001AE5A77A8AB6 /* OpenScreensUI */; };
+		394B63C54EEE3765928C7674 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 9D1B1FE9A421BC617637517E /* Assets.xcassets */; };
 		928EDC606268DA95EB82703A /* OpenScreensApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5667D7A07CC8C4897DA52F09 /* OpenScreensApp.swift */; };
 		A203453761CD80B71EB414DA /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 9D1B1FE9A421BC617637517E /* Assets.xcassets */; };
+		B399BC05D35C0DE1EB1C8801 /* ConnectIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEC6DFC7177B27E13751098A /* ConnectIntent.swift */; };
+		CB9C169741A88B535A5C01F1 /* OpenScreensCore in Frameworks */ = {isa = PBXBuildFile; productRef = EAEF0BF6A02CC4E68BB2097E /* OpenScreensCore */; };
 		DD4FF19E6D178AB96AE066A5 /* OpenScreensCore in Frameworks */ = {isa = PBXBuildFile; productRef = 884B9F3B2A26D3803168967C /* OpenScreensCore */; };
 /* End PBXBuildFile section */
 
@@ -17,10 +23,15 @@
 		09FFA95AEF8BCFF5C17022BD /* OpenScreens.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = OpenScreens.entitlements; sourceTree = "<group>"; };
 		53AA2E1792258B059AFA1E10 /* OpenScreensKit */ = {isa = PBXFileReference; lastKnownFileType = folder; name = OpenScreensKit; path = Packages/OpenScreensKit; sourceTree = SOURCE_ROOT; };
 		5667D7A07CC8C4897DA52F09 /* OpenScreensApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenScreensApp.swift; sourceTree = "<group>"; };
+		5C1C9DF7AEE4CB77B07FD7CA /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		75CD210FDF59A5BDC4D63C89 /* OpenScreens.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = OpenScreens.entitlements; sourceTree = "<group>"; };
 		9435DCF3227A4B7B8F8D2DB7 /* OpenScreens.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = OpenScreens.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		98E870A4338DEB424CCC0C5E /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		9D1B1FE9A421BC617637517E /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		9E7349B5B05A9A64AABCEBCF /* OpenScreensApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenScreensApp.swift; sourceTree = "<group>"; };
+		C745C133F3E103C9B3E9DC77 /* OpenScreens iOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = "OpenScreens iOS.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		E2BF213BE8A90354C517D92D /* Base.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Base.xcconfig; sourceTree = "<group>"; };
+		EEC6DFC7177B27E13751098A /* ConnectIntent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectIntent.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -33,16 +44,36 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		459D805A3F40A7177B52D65E /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				18451E96E6328CCD5664589F /* OpenScreensUI in Frameworks */,
+				CB9C169741A88B535A5C01F1 /* OpenScreensCore in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
 		4855F235CB5295CC48ADD951 /* Apps */ = {
 			isa = PBXGroup;
 			children = (
+				4F338962DDEADF0779C43422 /* iOS */,
 				633439486FE23EB40FECE532 /* macOS */,
 				AF4F25CBA2B36873C2A5F4D0 /* Shared */,
 			);
 			path = Apps;
+			sourceTree = "<group>";
+		};
+		4F338962DDEADF0779C43422 /* iOS */ = {
+			isa = PBXGroup;
+			children = (
+				5C1C9DF7AEE4CB77B07FD7CA /* Info.plist */,
+				75CD210FDF59A5BDC4D63C89 /* OpenScreens.entitlements */,
+				9E7349B5B05A9A64AABCEBCF /* OpenScreensApp.swift */,
+			);
+			path = iOS;
 			sourceTree = "<group>";
 		};
 		633439486FE23EB40FECE532 /* macOS */ = {
@@ -76,9 +107,18 @@
 		AF4F25CBA2B36873C2A5F4D0 /* Shared */ = {
 			isa = PBXGroup;
 			children = (
+				C488C9B681CEDB0859C420A3 /* Intents */,
 				9D1B1FE9A421BC617637517E /* Assets.xcassets */,
 			);
 			path = Shared;
+			sourceTree = "<group>";
+		};
+		C488C9B681CEDB0859C420A3 /* Intents */ = {
+			isa = PBXGroup;
+			children = (
+				EEC6DFC7177B27E13751098A /* ConnectIntent.swift */,
+			);
+			path = Intents;
 			sourceTree = "<group>";
 		};
 		DD16F372E099448287B9F1F6 /* Config */ = {
@@ -92,6 +132,7 @@
 		E590E3626B8B9DBF84E51413 /* Products */ = {
 			isa = PBXGroup;
 			children = (
+				C745C133F3E103C9B3E9DC77 /* OpenScreens iOS.app */,
 				9435DCF3227A4B7B8F8D2DB7 /* OpenScreens.app */,
 			);
 			name = Products;
@@ -121,6 +162,27 @@
 			productReference = 9435DCF3227A4B7B8F8D2DB7 /* OpenScreens.app */;
 			productType = "com.apple.product-type.application";
 		};
+		DFD5A882D62A986B4C60E02E /* OpenScreens iOS */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 21C2DFE007CFAF713B2EEDE9 /* Build configuration list for PBXNativeTarget "OpenScreens iOS" */;
+			buildPhases = (
+				ED47B4CD6B699DE413BEDB1A /* Sources */,
+				996A74BEC5A8BB8835E0EFA4 /* Resources */,
+				459D805A3F40A7177B52D65E /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = "OpenScreens iOS";
+			packageProductDependencies = (
+				1D356AC75D4B187F24937B11 /* OpenScreensUI */,
+				EAEF0BF6A02CC4E68BB2097E /* OpenScreensCore */,
+			);
+			productName = "OpenScreens iOS";
+			productReference = C745C133F3E103C9B3E9DC77 /* OpenScreens iOS.app */;
+			productType = "com.apple.product-type.application";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -131,6 +193,9 @@
 				LastUpgradeCheck = 1430;
 				TargetAttributes = {
 					CBC80993B877F70B11D25A27 = {
+						ProvisioningStyle = Automatic;
+					};
+					DFD5A882D62A986B4C60E02E = {
 						ProvisioningStyle = Automatic;
 					};
 				};
@@ -153,6 +218,7 @@
 			projectRoot = "";
 			targets = (
 				CBC80993B877F70B11D25A27 /* OpenScreens */,
+				DFD5A882D62A986B4C60E02E /* OpenScreens iOS */,
 			);
 		};
 /* End PBXProject section */
@@ -166,6 +232,14 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		996A74BEC5A8BB8835E0EFA4 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				394B63C54EEE3765928C7674 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
@@ -173,13 +247,43 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				B399BC05D35C0DE1EB1C8801 /* ConnectIntent.swift in Sources */,
 				928EDC606268DA95EB82703A /* OpenScreensApp.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		ED47B4CD6B699DE413BEDB1A /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				122D16FCC4730D4F758C39A2 /* ConnectIntent.swift in Sources */,
+				055BCA920FB31C33DCD7C48F /* OpenScreensApp.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin XCBuildConfiguration section */
+		24C01A35A022375921496861 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = Apps/iOS/OpenScreens.entitlements;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				INFOPLIST_FILE = Apps/iOS/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "$(OPENSCREENS_BUNDLE_ID)";
+				PRODUCT_NAME = OpenScreens;
+				SDKROOT = iphoneos;
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
 		3E3C2331F8046C9C687BB812 /* Release */ = {
 			isa = XCBuildConfiguration;
 			baseConfigurationReference = E2BF213BE8A90354C517D92D /* Base.xcconfig */;
@@ -229,7 +333,6 @@
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
-				SDKROOT = macosx;
 				SWIFT_COMPILATION_MODE = wholemodule;
 				SWIFT_OPTIMIZATION_LEVEL = "-O";
 			};
@@ -291,7 +394,6 @@
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
-				SDKROOT = macosx;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 			};
@@ -313,6 +415,26 @@
 				SDKROOT = macosx;
 			};
 			name = Debug;
+		};
+		D238B8D0443B86CF9D815D5C /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = Apps/iOS/OpenScreens.entitlements;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				INFOPLIST_FILE = Apps/iOS/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "$(OPENSCREENS_BUNDLE_ID)";
+				PRODUCT_NAME = OpenScreens;
+				SDKROOT = iphoneos;
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
 		};
 		E6D28AE314FAE07AE672B154 /* Release */ = {
 			isa = XCBuildConfiguration;
@@ -343,6 +465,15 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
+		21C2DFE007CFAF713B2EEDE9 /* Build configuration list for PBXNativeTarget "OpenScreens iOS" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				24C01A35A022375921496861 /* Debug */,
+				D238B8D0443B86CF9D815D5C /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 		FB87AF73D8251B2190CA582D /* Build configuration list for PBXNativeTarget "OpenScreens" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
@@ -362,11 +493,19 @@
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		1D356AC75D4B187F24937B11 /* OpenScreensUI */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = OpenScreensUI;
+		};
 		6CBFB62E94001AE5A77A8AB6 /* OpenScreensUI */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = OpenScreensUI;
 		};
 		884B9F3B2A26D3803168967C /* OpenScreensCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = OpenScreensCore;
+		};
+		EAEF0BF6A02CC4E68BB2097E /* OpenScreensCore */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = OpenScreensCore;
 		};

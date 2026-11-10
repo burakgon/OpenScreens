@@ -87,14 +87,11 @@ public final class RemoteCanvasView: NSView {
                 track(.layout)
                 track(.frame)
                 track(.cursor)
+                track(.focus)
             }
             NotificationCenter.default.addObserver(
                 self, selector: #selector(windowDidResignKey),
                 name: NSWindow.didResignKeyNotification, object: window)
-            DispatchQueue.main.async { [weak self] in
-                guard let self, let window = self.window, window.firstResponder !== self else { return }
-                window.makeFirstResponder(self)
-            }
         } else {
             isTracking = false
             NotificationCenter.default.removeObserver(self)
@@ -120,7 +117,7 @@ public final class RemoteCanvasView: NSView {
     // MARK: - Observation
 
     private enum Tracked: Sendable {
-        case layout, frame, cursor
+        case layout, frame, cursor, focus
     }
 
     /// Re-runs one of the update passes whenever something it read changes.
@@ -131,12 +128,23 @@ public final class RemoteCanvasView: NSView {
             case .layout: applyLayout()
             case .frame: applyFrame()
             case .cursor: applyCursor()
+            case .focus: applyFocus()
             }
         } onChange: { [weak self] in
             Task { @MainActor [weak self] in
                 self?.track(subject)
             }
         }
+    }
+
+    /// Takes keyboard focus as soon as the session is live, so typing goes to
+    /// the remote computer without a click first. Not before: while
+    /// connecting, the sign-in form needs the focus.
+    private func applyFocus() {
+        _ = session.focusRequests
+        guard session.isConnected, let window, window.firstResponder !== self,
+              window.attachedSheet == nil else { return }
+        window.makeFirstResponder(self)
     }
 
     // MARK: - Layout

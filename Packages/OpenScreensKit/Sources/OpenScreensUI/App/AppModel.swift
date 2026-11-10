@@ -12,13 +12,27 @@ public final class AppModel {
     public let credentials: CredentialStore
     public let sessions: SessionManager
 
+    /// A link waiting to be opened. Set from wherever the request arrives —
+    /// a URL, a Shortcut, a widget — and consumed by the library, which is
+    /// the one place that knows how to present a session.
+    public var pendingLink: AppLink?
+
+    /// The model used by the running app. App Intents and the app's scenes
+    /// have to agree on one instance.
+    public static let shared = AppModel()
+
     public init(
         library: LibraryStore? = nil,
         settings: AppSettings? = nil,
-        credentials: CredentialStore = CredentialStore()
+        credentials: CredentialStore? = nil
     ) {
         let library = library ?? LibraryStore()
         let settings = settings ?? AppSettings()
+        // An isolated run keeps its secrets in memory so it never reads from
+        // or writes to the user's keychain.
+        let credentials = credentials ?? (StorageLocation.isIsolated
+            ? CredentialStore(storage: InMemorySecretStorage())
+            : CredentialStore())
         self.library = library
         self.settings = settings
         self.credentials = credentials
