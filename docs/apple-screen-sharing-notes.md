@@ -129,6 +129,56 @@ when the viewer disconnects. Apple's viewer uses it to make both ends read
 key codes the same way. The server also reports its own input source to the
 viewer.
 
+## Virtual displays
+
+High Performance mode can replace the Mac's displays with virtual ones the
+viewer describes, which is how a desktop follows a window:
+
+```
+1d 00
+<size: u16>               size of what follows
+00 01                     version
+<display count: u16>      1 or 2
+00 00 00 00               flags
+```
+
+then one record per display, each a fixed 156 bytes followed by its modes:
+
+```
+<record size: u16>        156 + 28 for each mode
+<name>                    120 bytes, UTF-8, zero padded
+<flags: u32>              bit 0: resolution may change later; bit 1: keep the refresh rate as given
+<attributes: u32>
+<width: f32> <height: f32>            physical size in millimetres
+<maximum width: u32> <maximum height: u32>   in pixels
+<current mode: u16>       index into the modes that follow
+<preferred mode: u16>     index into the modes that follow
+<identifier: u32>
+<mode count: u16>
+```
+
+and each mode:
+
+```
+<pixel width: u32> <pixel height: u32>
+<point width: u32> <point height: u32>
+<refresh rate: f64>
+<flags: u32>              bit 0: HDR
+```
+
+A display is HiDPI when its pixel size is exactly twice its point size.
+
+The two mode indexes are easy to take for a position, and with one display
+it makes no difference, since both are zero either way. With two it does:
+the server checks each index against the mode count, and when one is out
+of range it logs `N is not a valid current display mode index`, creates no
+display at all, stops the video it was sending and says nothing to the
+viewer. Nothing in the message places a display. The server puts the second
+to the right of the first and reports where both are in the display
+information that follows, then offers a second video stream for it.
+
+The name is what the Mac shows for the display in its Displays settings.
+
 ## What this means for a viewer
 
 Sending characters makes typing independent of the two layouts and costs
