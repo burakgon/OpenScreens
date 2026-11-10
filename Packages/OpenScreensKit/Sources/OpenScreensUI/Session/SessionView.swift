@@ -23,7 +23,11 @@ public struct SessionView: View {
                 .ignoresSafeArea()
 
             RemoteCanvas(session: session)
+                #if os(iOS)
+                // The canvas fills the screen and keeps the picture clear of
+                // the notch and home indicator itself.
                 .ignoresSafeArea()
+                #endif
                 .allowsHitTesting(isLive)
                 .accessibilityLabel("Screen of \(session.computer.displayName)")
 
