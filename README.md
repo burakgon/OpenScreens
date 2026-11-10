@@ -57,7 +57,7 @@ VNC.
 - **SSH tunnels** carry the whole connection inside SSH, with a password or a
   key. A server's key is shown before it is trusted, and a changed key stops
   the connection.
-- **Wake-on-LAN** wakes a sleeping computer first.
+- **Wake-on-LAN** wakes a sleeping computer first (from the Mac app).
 - `vnc://` links, a menu bar item on the Mac, and actions for Shortcuts.
 
 **Your library**

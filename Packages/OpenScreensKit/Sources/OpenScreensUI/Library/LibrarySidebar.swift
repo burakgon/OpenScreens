@@ -147,6 +147,9 @@ struct ComputerMenu: View {
             }
         }
 
+        #if os(macOS)
+        // A broadcast on the local network, which iOS does not let an app
+        // send without an entitlement Apple grants case by case.
         if let address = computer.macAddress.flatMap({ MACAddress($0) }) {
             Button("Wake", systemImage: "power") {
                 Task {
@@ -156,6 +159,7 @@ struct ComputerMenu: View {
                 }
             }
         }
+        #endif
 
         Divider()
 

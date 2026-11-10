@@ -502,7 +502,15 @@ public final class RemoteSession: Identifiable {
         computer.macAddress.flatMap { MACAddress($0) }
     }
 
-    public var canWake: Bool { wakeAddress != nil }
+    /// Waking needs a broadcast on the local network, which iOS only allows
+    /// an app that Apple has granted the multicast entitlement.
+    public var canWake: Bool {
+        #if os(macOS)
+        wakeAddress != nil
+        #else
+        false
+        #endif
+    }
 
     /// Sends the computer a Wake-on-LAN packet, gives it a moment to come
     /// up, and tries the connection again.
