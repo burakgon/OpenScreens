@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 
 /// Everything that can be tuned for one computer's connections.
@@ -262,6 +263,19 @@ public enum DisplayLayout: String, Codable, CaseIterable, Identifiable, Sendable
     public init(from decoder: any Decoder) throws {
         let raw = try decoder.singleValueContainer().decode(String.self)
         self = DisplayLayout(rawValue: raw) ?? .single
+    }
+
+    /// The part of a view one display is sized for when the desktop follows
+    /// the window.
+    ///
+    /// Two virtual displays are shown side by side. In a view that is wider
+    /// than it is tall each is given half the width, so together they fill
+    /// it. A taller view gives each its full size instead: half of it would
+    /// be too narrow to work in, and zooming in on one display then shows it
+    /// edge to edge.
+    public func room(forOneDisplayIn viewSize: CGSize) -> CGSize {
+        guard self == .twoVirtual, viewSize.width >= viewSize.height else { return viewSize }
+        return CGSize(width: (viewSize.width / 2).rounded(.down), height: viewSize.height)
     }
 }
 

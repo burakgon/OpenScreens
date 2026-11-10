@@ -319,9 +319,7 @@ public final class RemoteSession: Identifiable {
 
         isStarting = true
         engine.configuration = configuration
-        if lastViewSize.width > 0 {
-            engine.updateRemoteDisplaySize(viewSize: lastViewSize, displayScale: lastDisplayScale)
-        }
+        requestDisplaySize()
         let request = VNCCredentials(
             host: computer.host,
             port: UInt16(clamping: computer.port),
@@ -677,9 +675,7 @@ public final class RemoteSession: Identifiable {
             // The tunnel, if there is one, carries the new connection too.
             configuration.transportProvider = engine.configuration.transportProvider
             engine.reconnect(with: configuration)
-            if lastViewSize.width > 0 {
-                engine.updateRemoteDisplaySize(viewSize: lastViewSize, displayScale: lastDisplayScale)
-            }
+            requestDisplaySize()
         } else {
             engine.configuration.promptForLoginPasswordAtLoginWindow =
                 newSettings.offerPasswordAtLoginWindow
@@ -706,7 +702,15 @@ public final class RemoteSession: Identifiable {
         guard size.width > 1, size.height > 1 else { return }
         lastViewSize = size
         lastDisplayScale = displayScale
-        engine.updateRemoteDisplaySize(viewSize: size, displayScale: displayScale)
+        requestDisplaySize()
+    }
+
+    /// Asks for displays that fit the view, once its size is known.
+    private func requestDisplaySize() {
+        guard lastViewSize.width > 1, lastViewSize.height > 1 else { return }
+        engine.updateRemoteDisplaySize(
+            viewSize: settings.displays.room(forOneDisplayIn: lastViewSize),
+            displayScale: lastDisplayScale)
     }
 
     // MARK: - Pointer
