@@ -7,6 +7,7 @@ import UniformTypeIdentifiers
 /// The session window's toolbar.
 struct SessionToolbar: ToolbarContent {
     @Environment(AppModel.self) private var model
+    @Environment(\.openWindow) private var openWindow
     let session: RemoteSession
 
     @State private var showsCurtainPrompt = false
@@ -69,6 +70,9 @@ struct SessionToolbar: ToolbarContent {
                     showsTypeText = true
                 }
                 .disabled(!session.canSendInput)
+                Button("Browse Files…", systemImage: "folder") {
+                    openWindow(id: WindowID.files, value: session.computer)
+                }
                 Divider()
                 @Bindable var settings = model.settings
                 Toggle(isOn: $settings.showsStatisticsOverlay) {

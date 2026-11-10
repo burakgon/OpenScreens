@@ -19,6 +19,7 @@ public struct LibraryView: View {
     #if os(iOS)
     @State private var presentedSession: RemoteSession?
     @State private var showsSettings = false
+    @State private var filesComputer: Computer?
     #endif
 
     public init() {}
@@ -82,6 +83,7 @@ public struct LibraryView: View {
                 filter = section
             }
             DebugAutomation.runIfRequested(model: model) { present($0) }
+            DebugAutomation.runFilesIfRequested(model: model) { browseFiles(on: $0) }
         }
         #endif
         #if os(iOS)
@@ -94,6 +96,10 @@ public struct LibraryView: View {
         }
         .sheet(isPresented: $showsSettings) {
             SettingsView()
+                .environment(model)
+        }
+        .sheet(item: $filesComputer) { computer in
+            FileBrowserView(computer: computer)
                 .environment(model)
         }
         #endif
@@ -286,6 +292,7 @@ public struct LibraryView: View {
         LibraryActions(
             connect: { computer, configure in connect(to: computer, configure: configure) },
             open: { connect(to: $0) },
+            browseFiles: { browseFiles(on: $0) },
             edit: { editor = .edit($0) },
             delete: { requestDeletion($0) },
             add: { addComputer($0) })
@@ -345,6 +352,14 @@ public struct LibraryView: View {
         present(model.sessions.open(target))
     }
 
+    private func browseFiles(on computer: Computer) {
+        #if os(macOS)
+        openWindow(id: WindowID.files, value: computer)
+        #else
+        filesComputer = computer
+        #endif
+    }
+
     private func open(_ link: AppLink) {
         switch link {
         case .computer(let id):
@@ -373,6 +388,8 @@ struct LibraryActions {
     var connect: (Computer, ((inout ConnectionSettings) -> Void)?) -> Void = { _, _ in }
     /// Connects to an address that is not in the library.
     var open: (ConnectionTarget) -> Void = { _ in }
+    /// Shows a computer's files.
+    var browseFiles: (Computer) -> Void = { _ in }
     var edit: (Computer) -> Void = { _ in }
     var delete: (Set<Computer.ID>) -> Void = { _ in }
     var add: (Computer?) -> Void = { _ in }

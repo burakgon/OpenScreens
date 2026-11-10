@@ -166,6 +166,7 @@ struct FloatingToolbar: View {
     @State private var dragOffset = CGSize.zero
     @State private var screenshotURL: URL?
     @State private var showsTypeText = false
+    @State private var showsFiles = false
 
     private var bridge: CanvasBridge { session.canvasBridge }
 
@@ -270,6 +271,9 @@ struct FloatingToolbar: View {
                 showsTypeText = true
             }
             .disabled(!session.canSendInput)
+            Button("Browse Files…", systemImage: "folder") {
+                showsFiles = true
+            }
             Divider()
             Button("Take Screenshot", systemImage: "camera") {
                 screenshotURL = Self.writeScreenshot(of: session, scale: displayScale)
@@ -297,6 +301,10 @@ struct FloatingToolbar: View {
         }
         .sheet(isPresented: $showsTypeText) {
             TypeTextSheet(session: session)
+        }
+        .sheet(isPresented: $showsFiles, onDismiss: { session.requestKeyboardFocus() }) {
+            FileBrowserView(computer: session.computer)
+                .environment(model)
         }
 
         ToolbarButton("Disconnect", systemName: "xmark", tint: .red, action: onClose)

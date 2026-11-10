@@ -57,6 +57,9 @@ what makes it testable:
   hosts the engine's video layers directly and turns its platform's events
   into calls on the session. Nothing about gestures or key events leaks
   above them.
+- `FileBrowser` is one SSH connection to a computer for its files: it signs
+  in the way a tunnel would, lists folders over SFTP and runs transfers one
+  at a time. It is independent of any screen-sharing session.
 
 ## A session, end to end
 

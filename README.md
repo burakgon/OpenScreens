@@ -74,6 +74,9 @@ VNC.
 
 - Shared clipboard. Curtain mode, which blanks the remote Mac's own screen
   while you work. Observe only. Lock the remote Mac when you disconnect.
+- **Files.** Browse the computer's folders and copy files and whole folders
+  in either direction, over SFTP, with nothing to install on the other end
+  beyond Remote Login or an SSH server.
 - Live statistics: mode, size, frame rate, bitrate, loss, and how the
   connection is protected.
 

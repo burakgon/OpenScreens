@@ -161,6 +161,10 @@ struct ComputerMenu: View {
         }
         #endif
 
+        Button("Browse Files…", systemImage: "folder") {
+            actions.browseFiles(computer)
+        }
+
         Divider()
 
         Button("Edit…", systemImage: "pencil") {

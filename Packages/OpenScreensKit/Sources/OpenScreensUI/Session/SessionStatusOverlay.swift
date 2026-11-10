@@ -28,7 +28,11 @@ struct SessionStatusOverlay: View {
                     // with its fields kept.
                     .id(prompt.purpose)
             case .awaitingHostKey(let prompt):
-                HostKeyCard(session: session, prompt: prompt, onCancel: onClose)
+                HostKeyCard(computer: session.computer, prompt: prompt) {
+                    session.answerHostKey(trust: true)
+                } onCancel: {
+                    onClose()
+                }
             case .failed(let message):
                 if session.isWaking {
                     ProgressCard(
@@ -149,9 +153,10 @@ private struct FailureCard: View {
 }
 
 /// Asks the user to vouch for an SSH server's key.
-private struct HostKeyCard: View {
-    let session: RemoteSession
+struct HostKeyCard: View {
+    let computer: Computer
     let prompt: RemoteSession.HostKeyPrompt
+    let onTrust: () -> Void
     let onCancel: () -> Void
 
     private var server: String {
@@ -161,7 +166,7 @@ private struct HostKeyCard: View {
     var body: some View {
         VStack(spacing: 16) {
             CardHeader(
-                computer: session.computer,
+                computer: computer,
                 title: prompt.keyHasChanged ? "The SSH Server's Key Has Changed" : "Verify the SSH Server",
                 symbolName: prompt.keyHasChanged ? "exclamationmark.shield" : "key.horizontal",
                 tint: prompt.keyHasChanged ? .red : .accentColor)
@@ -185,10 +190,8 @@ private struct HostKeyCard: View {
             HStack(spacing: 12) {
                 if prompt.keyHasChanged {
                     // The safe answer is the default one.
-                    Button("Trust New Key", role: .destructive) {
-                        session.answerHostKey(trust: true)
-                    }
-                    .buttonStyle(.glass)
+                    Button("Trust New Key", role: .destructive, action: onTrust)
+                        .buttonStyle(.glass)
                     Button("Cancel", role: .cancel, action: onCancel)
                         .buttonStyle(.glassProminent)
                         .keyboardShortcut(.defaultAction)
@@ -196,11 +199,9 @@ private struct HostKeyCard: View {
                     Button("Cancel", role: .cancel, action: onCancel)
                         .buttonStyle(.glass)
                         .keyboardShortcut(.cancelAction)
-                    Button("Trust and Connect") {
-                        session.answerHostKey(trust: true)
-                    }
-                    .buttonStyle(.glassProminent)
-                    .keyboardShortcut(.defaultAction)
+                    Button("Trust and Connect", action: onTrust)
+                        .buttonStyle(.glassProminent)
+                        .keyboardShortcut(.defaultAction)
                 }
             }
         }
@@ -349,7 +350,8 @@ private struct CredentialCard: View {
     }
 }
 
-private extension View {
+extension View {
+    /// The look of the fields on the sign-in cards.
     func credentialField() -> some View {
         textFieldStyle(.plain)
             .padding(.horizontal, 12)

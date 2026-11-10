@@ -7,6 +7,7 @@ import SwiftUI
 public enum WindowID {
     public static let library = "library"
     public static let session = "session"
+    public static let files = "files"
 }
 
 /// Every scene of the Mac app: the library, one window per session, and
@@ -57,6 +58,17 @@ public struct OpenScreensScenes: Scene {
         .commands {
             SessionCommands(model: model)
         }
+
+        WindowGroup("Files", id: WindowID.files, for: Computer.self) { $computer in
+            if let computer {
+                FileBrowserView(computer: computer)
+                    .appLock()
+                    .environment(model)
+                    .frame(minWidth: 520, minHeight: 360)
+            }
+        }
+        .defaultSize(width: 720, height: 520)
+        .restorationBehavior(.disabled)
 
         Settings {
             SettingsView()

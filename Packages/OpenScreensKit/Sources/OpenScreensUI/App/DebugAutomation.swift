@@ -150,6 +150,119 @@ enum DebugAutomation {
         }
     }
 
+    /// Opens a computer's files, or exercises them without the interface.
+    ///
+    ///     OPENSCREENS_FILES=vnc://user:password@host        open the Files window
+    ///     OPENSCREENS_FILES_TEST=vnc://user:password@host   make a folder, copy a file
+    ///                                                      there and back, compare,
+    ///                                                      clean up; report as JSON
+    static func runFilesIfRequested(model: AppModel, browse: @escaping (Computer) -> Void) {
+        let environment = ProcessInfo.processInfo.environment
+        func computer(from address: String?) -> Computer? {
+            guard let address, let target = ConnectionTarget(text: address) else { return nil }
+            let computer = Computer(
+                name: target.name ?? "", host: target.host, username: target.username, kind: target.kind)
+            if let password = target.password {
+                try? model.credentials.setPassword(password, for: computer.id)
+            }
+            return computer
+        }
+        if let computer = computer(from: environment["OPENSCREENS_FILES"]) {
+            browse(computer)
+        }
+        guard let computer = computer(from: environment["OPENSCREENS_FILES_TEST"]),
+              let reportPrefix = environment["OPENSCREENS_REPORT"] else { return }
+        Task {
+            let report = await exerciseFiles(of: computer, model: model)
+            if let data = try? JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]) {
+                try? data.write(to: URL(fileURLWithPath: reportPrefix + ".json"))
+            }
+            if environment["OPENSCREENS_EXIT"] == "1" {
+                exit(0)
+            }
+        }
+    }
+
+    private static func exerciseFiles(of computer: Computer, model: AppModel) async -> [String: Any] {
+        var report: [String: Any] = [:]
+        let browser = FileBrowser(
+            computer: computer, credentials: model.credentials,
+            sshKeys: model.sshKeys, knownHosts: model.knownHosts)
+        defer { browser.close() }
+
+        func wait(_ seconds: Double, until condition: () -> Bool) async -> Bool {
+            let deadline = Date.now.addingTimeInterval(seconds)
+            while Date.now < deadline {
+                if condition() { return true }
+                try? await Task.sleep(for: .milliseconds(100))
+            }
+            return condition()
+        }
+
+        browser.start()
+        var prompts: [String] = []
+        _ = await wait(30) {
+            if case .hostKey(let prompt) = browser.phase {
+                prompts.append("hostKey \(prompt.keyType)")
+                browser.answerHostKey(trust: true)
+            }
+            switch browser.phase {
+            case .ready, .failed, .signIn: return true
+            default: return false
+            }
+        }
+        _ = await wait(10) { !browser.isLoading && !browser.path.isEmpty || browser.phase != .ready }
+        report["prompts"] = prompts
+        report["phase"] = String(describing: browser.phase)
+        guard browser.phase == .ready else { return report }
+        report["home"] = browser.path
+        report["homeItemCount"] = browser.items.count
+
+        // A folder of our own, so nothing of the computer's is touched.
+        let folder = "openscreens-check-\(Int(Date.now.timeIntervalSince1970))"
+        let home = browser.path
+        browser.makeFolder(named: folder)
+        report["madeFolder"] = await wait(10) { browser.items.contains { $0.name == folder && $0.isDirectory } }
+        browser.go(to: home + "/" + folder)
+        _ = await wait(10) { browser.path.hasSuffix(folder) }
+
+        // A few megabytes that do not compress or repeat, there and back.
+        let scratch = FileManager.default.temporaryDirectory.appending(path: folder)
+        try? FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: scratch) }
+        var generator = SystemRandomNumberGenerator()
+        let payload = Data((0..<(3 * 1024 * 1024 + 123)).map { _ in UInt8.random(in: .min ... .max, using: &generator) })
+        let local = scratch.appending(path: "Sample ş 日本.bin")
+        try? payload.write(to: local)
+        browser.upload([local])
+        report["uploaded"] = await wait(60) { browser.transfers.last?.state == .finished }
+        report["uploadState"] = String(describing: browser.transfers.last?.state)
+        _ = await wait(10) { browser.items.contains { $0.name == local.lastPathComponent } }
+        report["listedSize"] = browser.items.first { $0.name == local.lastPathComponent }?.size ?? -1
+        report["expectedSize"] = payload.count
+
+        if let item = browser.items.first(where: { $0.name == local.lastPathComponent }) {
+            let downloads = scratch.appending(path: "Downloads")
+            try? FileManager.default.createDirectory(at: downloads, withIntermediateDirectories: true)
+            browser.download([item], to: downloads)
+            report["downloaded"] = await wait(60) { browser.transfers.last?.state == .finished }
+            let copy = try? Data(contentsOf: downloads.appending(path: item.name))
+            report["roundTripMatches"] = copy == payload
+            browser.rename(item, to: "Renamed.bin")
+            report["renamed"] = await wait(10) { browser.items.contains { $0.name == "Renamed.bin" } }
+        }
+
+        // Clean up, which also checks deleting a folder with something in it.
+        browser.go(to: home)
+        _ = await wait(10) { browser.path == home && browser.items.contains { $0.name == folder } }
+        if let made = browser.items.first(where: { $0.name == folder }) {
+            browser.delete([made])
+            report["deleted"] = await wait(15) { !browser.items.contains { $0.name == folder } }
+        }
+        report["error"] = browser.errorMessage ?? ""
+        return report
+    }
+
     /// Runs a key script: steps separated by `|`.
     ///
     ///     t=text            type text
