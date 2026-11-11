@@ -367,7 +367,14 @@ final class SSHChannelStream: Sendable {
         let channel = self.channel
         perform {
             guard self.endedReason == nil else { return }
-            channel.writeAndFlush(Self.message(bytes), promise: nil)
+            channel.writeAndFlush(Self.message(bytes)).whenFailure { error in
+                // Bytes that could not be sent leave a hole in the stream,
+                // and whoever queued them is waiting for an answer to
+                // something the peer never received. Nothing after that can
+                // be trusted, so the stream ends here, with the reason.
+                self.channelDidEnd(self.failure(for: error))
+                channel.close(promise: nil)
+            }
         }
     }
 
