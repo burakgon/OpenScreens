@@ -52,6 +52,18 @@ public final class AppSettings {
         didSet { defaults.set(hapticFeedback, forKey: Key.haptics) }
     }
 
+    /// Which edge of the picture a session's controls come out of on a
+    /// touch screen.
+    public var sessionControlsEdge: SessionControlsEdge {
+        didSet { defaults.set(sessionControlsEdge.rawValue, forKey: Key.controlsEdge) }
+    }
+
+    /// Leave a session's controls out on a touch screen, rather than putting
+    /// them away when the remote screen is touched.
+    public var keepsSessionControlsVisible: Bool {
+        didSet { defaults.set(keepsSessionControlsVisible, forKey: Key.keepsControlsVisible) }
+    }
+
     /// Show a menu bar item on the Mac for connecting without the library.
     public var showsMenuBarItem: Bool {
         didSet { defaults.set(showsMenuBarItem, forKey: Key.menuBarItem) }
@@ -109,6 +121,8 @@ public final class AppSettings {
         confirmsDisconnect = defaults.bool(forKey: Key.confirmsDisconnect)
         hapticFeedback = defaults.object(forKey: Key.haptics) as? Bool ?? true
         showsMenuBarItem = defaults.bool(forKey: Key.menuBarItem)
+        sessionControlsEdge = SessionControlsEdge(rawValue: defaults.string(forKey: Key.controlsEdge) ?? "") ?? .top
+        keepsSessionControlsVisible = defaults.bool(forKey: Key.keepsControlsVisible)
         toolbarItems = (defaults.stringArray(forKey: Key.toolbarItems))?
             .compactMap(ToolbarItemKind.init(rawValue:)) ?? ToolbarItemKind.defaultItems
         customShortcuts = Self.readCodable(defaults, Key.customShortcuts) ?? []
@@ -135,6 +149,8 @@ public final class AppSettings {
         confirmsDisconnect = fresh.confirmsDisconnect
         hapticFeedback = fresh.hapticFeedback
         showsMenuBarItem = fresh.showsMenuBarItem
+        sessionControlsEdge = fresh.sessionControlsEdge
+        keepsSessionControlsVisible = fresh.keepsSessionControlsVisible
         toolbarItems = fresh.toolbarItems
         customShortcuts = fresh.customShortcuts
         requiresAuthentication = fresh.requiresAuthentication
@@ -163,6 +179,8 @@ public final class AppSettings {
         static let confirmsDisconnect = "confirmsDisconnect"
         static let haptics = "hapticFeedback"
         static let menuBarItem = "showsMenuBarItem"
+        static let controlsEdge = "sessionControlsEdge"
+        static let keepsControlsVisible = "keepsSessionControlsVisible"
         static let toolbarItems = "toolbarItems"
         static let customShortcuts = "customShortcuts"
         static let requiresAuthentication = "requiresAuthentication"
@@ -175,9 +193,16 @@ public final class AppSettings {
             defaultConnection, libraryLayout, librarySort, showsNearby, savesPreviews,
             showsStatistics, keepsAwake, confirmsDisconnect, haptics, toolbarItems,
             customShortcuts, requiresAuthentication, syncsWithICloud, tailscaleEnabled,
-            tailnet, hidesOfflineTailscale, menuBarItem,
+            tailnet, hidesOfflineTailscale, menuBarItem, controlsEdge, keepsControlsVisible,
         ]
     }
+}
+
+/// The edge of the picture a session's controls come out of.
+public enum SessionControlsEdge: String, CaseIterable, Sendable {
+    /// Over the remote Mac's menu bar, where there is least to cover.
+    case top
+    case bottom
 }
 
 public enum LibraryLayout: String, CaseIterable, Identifiable, Sendable {

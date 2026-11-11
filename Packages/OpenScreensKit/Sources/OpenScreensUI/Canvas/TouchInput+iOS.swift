@@ -644,6 +644,8 @@ extension RemoteCanvasView: UIGestureRecognizerDelegate {
     }
 
     public override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        // Whatever the touch turns out to be, it is on the remote screen.
+        session.canvasBridge.canvasTouches &+= 1
         guard session.canSendInput, let touch = precisionTouch(in: touches) else {
             super.touchesBegan(touches, with: event)
             return

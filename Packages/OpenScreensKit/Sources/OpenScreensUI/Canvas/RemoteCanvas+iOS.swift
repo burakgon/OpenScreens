@@ -180,11 +180,11 @@ public final class RemoteCanvasView: UIView {
         if session.viewport.backingScale != scale {
             session.viewport.backingScale = scale
         }
-        var insets = Viewport.Insets(
-            top: safeAreaInsets.top,
-            left: safeAreaInsets.left,
-            bottom: safeAreaInsets.bottom,
-            right: safeAreaInsets.right)
+        let layout = chromeLayout()
+        if session.canvasBridge.chromeLayout != layout {
+            session.canvasBridge.chromeLayout = layout
+        }
+        var insets = layout.pictureInsets
         // The desktop is sized for the screen with nothing covering it. A
         // keyboard or trackpad deck only moves the picture out of the way;
         // resizing the remote desktop every time one appears would be slow
@@ -197,6 +197,30 @@ public final class RemoteCanvasView: UIView {
             session.viewport.insets = insets
         }
         session.viewDidResize(to: uncovered, displayScale: scale)
+    }
+
+    /// Where the picture and the controls go on this screen as it is now.
+    private func chromeLayout() -> SessionChromeLayout {
+        let scene = window?.windowScene
+        var statusBar = CGRect.zero
+        if let window, let frame = scene?.statusBarManager?.statusBarFrame, !frame.isEmpty {
+            statusBar = convert(frame, from: window)
+        }
+        let sensorSide: SessionChromeLayout.Side? = switch scene?.effectiveGeometry.interfaceOrientation {
+        // Named for where the home indicator is; the sensors are opposite.
+        case .landscapeRight: .left
+        case .landscapeLeft: .right
+        default: nil
+        }
+        return SessionChromeLayout(
+            size: bounds.size,
+            safeArea: Viewport.Insets(
+                top: safeAreaInsets.top,
+                left: safeAreaInsets.left,
+                bottom: safeAreaInsets.bottom,
+                right: safeAreaInsets.right),
+            statusBar: statusBar,
+            sensorSide: sensorSide)
     }
 
     private func applyLayout() {
@@ -414,8 +438,12 @@ public final class RemoteCanvasView: UIView {
         guard #available(iOS 27.1, *) else { return }
         let interaction = UIHingeInteraction { [weak self] _, update in
             guard let self else { return }
-            let isHalfOpen = update.hinge?.status == .partiallyOpen
-            self.session.canvasBridge.hingeIsPartiallyOpen = isHalfOpen
+            let isHalfOpen = update.hinge.map {
+                HingePosture.isLaptopLike(isPartiallyOpen: $0.status == .partiallyOpen, angle: $0.angle)
+            } ?? false
+            if self.session.canvasBridge.hingeIsPartiallyOpen != isHalfOpen {
+                self.session.canvasBridge.hingeIsPartiallyOpen = isHalfOpen
+            }
             self.setNeedsLayout()
         }
         addInteraction(interaction)
@@ -439,8 +467,15 @@ public final class CanvasBridge {
     public internal(set) var isKeyboardVisible = false
     /// Whether a hardware keyboard is attached.
     public internal(set) var hasHardwareKeyboard = false
-    /// Whether a foldable device is being held half open.
+    /// Whether a foldable device is being held half open like a laptop,
+    /// with one half of the screen flat and the other standing.
     public internal(set) var hingeIsPartiallyOpen = false
+    /// Where the picture and the controls go on the screen the canvas is
+    /// on. Nil until the canvas has been laid out.
+    public internal(set) var chromeLayout: SessionChromeLayout?
+    /// Counts touches on the remote screen, so that controls that are out
+    /// only while they are wanted know when to go.
+    public internal(set) var canvasTouches = 0
     /// Whether the trackpad deck is showing under the picture.
     public var isDeckVisible = false
 
@@ -469,7 +504,14 @@ public final class CanvasBridge {
         canvas?.movePointerRelatively(by: delta, interval: interval)
     }
 
+    /// Says that the remote screen is being worked on from somewhere other
+    /// than the canvas: the trackpad deck moves its pointer too.
+    public func noteWorkOnRemoteScreen() {
+        canvasTouches &+= 1
+    }
+
     public func deckClicked(_ button: PointerButtons = .left) {
+        noteWorkOnRemoteScreen()
         canvas?.clickAtPointer(button)
     }
 

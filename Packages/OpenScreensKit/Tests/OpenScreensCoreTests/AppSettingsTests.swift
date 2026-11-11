@@ -36,6 +36,8 @@ private struct Preferences: Equatable {
     var keepsDisplayAwake: Bool
     var confirmsDisconnect: Bool
     var hapticFeedback: Bool
+    var sessionControlsEdge: SessionControlsEdge
+    var keepsSessionControlsVisible: Bool
     var toolbarItems: [ToolbarItemKind]
     var customShortcuts: [RemoteShortcut]
     var requiresAuthentication: Bool
@@ -55,6 +57,8 @@ private struct Preferences: Equatable {
         keepsDisplayAwake = settings.keepsDisplayAwake
         confirmsDisconnect = settings.confirmsDisconnect
         hapticFeedback = settings.hapticFeedback
+        sessionControlsEdge = settings.sessionControlsEdge
+        keepsSessionControlsVisible = settings.keepsSessionControlsVisible
         toolbarItems = settings.toolbarItems
         customShortcuts = settings.customShortcuts
         requiresAuthentication = settings.requiresAuthentication
@@ -87,6 +91,8 @@ struct AppSettingsTests {
         settings.keepsDisplayAwake = false
         settings.confirmsDisconnect = true
         settings.hapticFeedback = false
+        settings.sessionControlsEdge = .bottom
+        settings.keepsSessionControlsVisible = true
         settings.toolbarItems = [.files, .keyboard, .statistics]
         settings.customShortcuts = [
             RemoteShortcut(name: "Lock", modifiers: [.control, .command], key: .character("q")),
@@ -112,6 +118,10 @@ struct AppSettingsTests {
         #expect(settings.keepsDisplayAwake)
         #expect(!settings.confirmsDisconnect)
         #expect(settings.hapticFeedback)
+        // Out of the top, over the menu bar, and put away when not in use:
+        // a Dock is the last thing to stand controls on.
+        #expect(settings.sessionControlsEdge == .top)
+        #expect(!settings.keepsSessionControlsVisible)
         #expect(settings.toolbarItems == ToolbarItemKind.defaultItems)
         #expect(settings.customShortcuts.isEmpty)
         #expect(!settings.requiresAuthentication)
@@ -139,6 +149,8 @@ struct AppSettingsTests {
         #expect(changed.keepsDisplayAwake != untouched.keepsDisplayAwake)
         #expect(changed.confirmsDisconnect != untouched.confirmsDisconnect)
         #expect(changed.hapticFeedback != untouched.hapticFeedback)
+        #expect(changed.sessionControlsEdge != untouched.sessionControlsEdge)
+        #expect(changed.keepsSessionControlsVisible != untouched.keepsSessionControlsVisible)
         #expect(changed.toolbarItems != untouched.toolbarItems)
         #expect(changed.customShortcuts != untouched.customShortcuts)
         #expect(changed.requiresAuthentication != untouched.requiresAuthentication)
@@ -240,6 +252,8 @@ struct AppSettingsTests {
         #expect(stored.object(forKey: "keepsDisplayAwake") as? Bool == false)
         #expect(stored.object(forKey: "confirmsDisconnect") as? Bool == true)
         #expect(stored.object(forKey: "hapticFeedback") as? Bool == false)
+        #expect(stored.string(forKey: "sessionControlsEdge") == "bottom")
+        #expect(stored.object(forKey: "keepsSessionControlsVisible") as? Bool == true)
         #expect(stored.stringArray(forKey: "toolbarItems") == ["files", "keyboard", "statistics"])
         #expect(stored.object(forKey: "requiresAuthentication") as? Bool == true)
         #expect(stored.object(forKey: "syncsWithICloud") as? Bool == false)

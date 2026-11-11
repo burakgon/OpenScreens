@@ -13,6 +13,9 @@ struct FileTransferOverlay: View {
     /// Transfers the user has dismissed, or that finished well long enough
     /// ago to go away by themselves.
     @State private var hidden: Set<UUID> = []
+    #if os(iOS)
+    @Environment(AppModel.self) private var model
+    #endif
     /// Finished uploads that are on their way out, so that each is sent off
     /// once however many times the list changes meanwhile.
     @State private var leaving: Set<UUID> = []
@@ -52,13 +55,16 @@ struct FileTransferOverlay: View {
                     .padding(.bottom, 14)
                     .transition(.opacity.combined(with: .move(edge: .bottom)))
                     #else
-                    // The controls float along the bottom of the screen, so
-                    // the list keeps to the top, under the place files are
-                    // dragged to when that is showing.
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                    // The list keeps to the edge the controls do not come
+                    // out of. At the top it goes under the place files are
+                    // dragged to, when that is showing.
+                    .frame(
+                        maxWidth: .infinity, maxHeight: .infinity,
+                        alignment: listIsAtTheBottom ? .bottom : .top)
                     .padding(.horizontal, 12 + max(session.viewport.insets.left, session.viewport.insets.right))
                     .padding(.top, listTop)
-                    .transition(.opacity.combined(with: .move(edge: .top)))
+                    .padding(.bottom, listBottom)
+                    .transition(.opacity.combined(with: .move(edge: listIsAtTheBottom ? .bottom : .top)))
                     #endif
             }
         }
@@ -90,10 +96,21 @@ struct FileTransferOverlay: View {
     }
 
     #if os(iOS)
+    private var listIsAtTheBottom: Bool {
+        guard case .floating = session.canvasBridge.chromeLayout?.controls ?? .floating else { return false }
+        return model.settings.sessionControlsEdge == .top
+    }
+
     private var listTop: CGFloat {
         let top = session.viewport.insets.top + 12
         guard session.fileTransfers.showsDragOutTarget else { return top }
         return targetCentre.y + FileFetchTarget.size.height / 2 + 12
+    }
+
+    /// Clear of a keyboard or the deck, and of the part of the screen the
+    /// system keeps for the home indicator.
+    private var listBottom: CGFloat {
+        max(session.viewport.insets.bottom, session.canvasBridge.chromeLayout?.safeArea.bottom ?? 0) + 12
     }
     #endif
 

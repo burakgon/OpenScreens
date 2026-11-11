@@ -152,7 +152,9 @@ final class DeckSurfaceView: UIView {
 
     private func track(_ point: CGPoint, began: Bool) {
         let now = CACurrentMediaTime()
-        if !began {
+        if began {
+            bridge.noteWorkOnRemoteScreen()
+        } else {
             bridge.deckMoved(
                 by: CGSize(width: point.x - lastPoint.x, height: point.y - lastPoint.y),
                 interval: now - lastTime)
@@ -191,6 +193,7 @@ final class DeckSurfaceView: UIView {
         switch recognizer.state {
         case .began:
             recognizer.setTranslation(.zero, in: self)
+            bridge.noteWorkOnRemoteScreen()
             bridge.deckScrolled(by: .zero, phase: .began)
         case .changed:
             let translation = recognizer.translation(in: self)

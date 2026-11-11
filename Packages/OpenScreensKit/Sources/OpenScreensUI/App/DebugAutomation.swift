@@ -18,6 +18,7 @@ import SwiftUI
 ///     OPENSCREENS_SHARED_CLIPBOARD=1                  share the clipboard (off unless asked for)
 ///     OPENSCREENS_LOCK_ON_DISCONNECT=1                lock the remote Mac on leaving
 ///     OPENSCREENS_TOUCH=trackpad|touch                how touches drive the pointer
+///     OPENSCREENS_DECK=1                              start with the trackpad deck out
 ///     OPENSCREENS_SECTION=favorites|recents|nearby|tailscale   open the library there
 ///     OPENSCREENS_TRUST_HOST_KEY=1                    accept the SSH server's key when asked
 ///     OPENSCREENS_SSH_PASSWORD=secret                 answer the SSH sign-in when asked
@@ -33,6 +34,11 @@ import SwiftUI
 /// None of this exists in release builds.
 enum DebugAutomation {
     private static var didStart = false
+
+    /// Whether sessions start with the trackpad deck out.
+    static var startsWithDeck: Bool {
+        ProcessInfo.processInfo.environment["OPENSCREENS_DECK"] == "1"
+    }
 
     /// The library section to open at launch, from `OPENSCREENS_SECTION`.
     static var requestedSection: LibraryFilter? {
@@ -529,6 +535,13 @@ enum DebugAutomation {
         if let reason = session.fallbackReason {
             report["fallbackReason"] = reason
         }
+        #if os(iOS)
+        if let layout = session.canvasBridge.chromeLayout {
+            report["safeArea"] = [layout.safeArea.top, layout.safeArea.left, layout.safeArea.bottom, layout.safeArea.right]
+            report["controls"] = String(describing: layout.controls)
+            report["showsStatusBar"] = layout.showsStatusBar
+        }
+        #endif
         if let statistics = session.statistics {
             report["framesPerSecond"] = statistics.framesPerSecond ?? -1
             report["bitrateKbps"] = statistics.bitrateKbps ?? -1

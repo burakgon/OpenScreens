@@ -145,11 +145,18 @@ final class SessionUITests: XCTestCase {
     /// picture reaches the top of the device that is a strip the system may
     /// keep for a gesture of its own. A tap there is a click all the same,
     /// and only one.
-    func testATapAtTheTopEdgeOfTheScreenStillClicks() async throws {
+    func testATapAtTheTopEdgeOfThePictureStillClicks() async throws {
         let canvas = try await launch(touch: "touch")
 
-        canvas.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0))
-            .withOffset(CGVector(dx: 0, dy: 6))
+        // Where the status bar runs across the top, the picture starts
+        // under it, and a tap on the bar itself is the system's.
+        var top: CGFloat = 0
+        let statusBar = XCUIApplication(bundleIdentifier: "com.apple.springboard").statusBars.firstMatch
+        if statusBar.exists, statusBar.frame.minY < 1, statusBar.frame.width > canvas.frame.width * 0.8 {
+            top = statusBar.frame.maxY
+        }
+        canvas.coordinate(withNormalizedOffset: CGVector(dx: 0.3, dy: 0))
+            .withOffset(CGVector(dx: 0, dy: top + 6))
             .tap()
 
         let clicked = await server.waitForEvents { events in
@@ -259,9 +266,48 @@ final class SessionUITests: XCTestCase {
 
     // MARK: - Leaving
 
+    // MARK: - Controls
+
+    /// Brings the controls out if they have been put away. Where they stand
+    /// beside the picture they are never away.
+    private func showControls() {
+        let handle = app.buttons["Show Controls"].firstMatch
+        if handle.waitForExistence(timeout: 1), handle.isHittable {
+            handle.tap()
+        }
+    }
+
+    /// The controls are in the way of whatever is under them, and the first
+    /// touch on the remote screen says they are done with.
+    func testTouchingTheRemoteScreenPutsTheControlsAway() async throws {
+        let canvas = try await launch(touch: "touch")
+        showControls()
+        let disconnect = app.buttons["Disconnect"].firstMatch
+        XCTAssertTrue(disconnect.waitForExistence(timeout: 3), "the controls never came out")
+
+        let handle = app.buttons["Show Controls"].firstMatch
+        // Controls standing beside the picture stay: they cover nothing.
+        let floats = disconnect.frame.maxX <= canvas.frame.midX + canvas.frame.width / 2
+            && disconnect.frame.width < disconnect.frame.height * 3
+            && disconnect.frame.minY < canvas.frame.height / 2
+        canvas.coordinate(withNormalizedOffset: CGVector(dx: 0.4, dy: 0.6)).tap()
+
+        if handle.waitForExistence(timeout: 3) {
+            XCTAssertFalse(disconnect.exists && disconnect.isHittable, "the controls stayed out")
+            // And the handle brings them back.
+            handle.tap()
+            XCTAssertTrue(disconnect.waitForExistence(timeout: 3), "the handle did not bring the controls back")
+            XCTAssertTrue(disconnect.isHittable)
+        } else {
+            XCTAssertTrue(disconnect.isHittable, "the controls went and left no way to bring them back")
+            _ = floats
+        }
+    }
+
     func testDisconnectingClosesTheConnection() async throws {
         _ = try await launch(touch: "touch")
 
+        showControls()
         app.buttons["Disconnect"].firstMatch.tap()
         // Asked to confirm, when that preference is on.
         let confirm = app.buttons["Disconnect"].firstMatch

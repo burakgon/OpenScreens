@@ -4,8 +4,8 @@ import SwiftUI
 import UniformTypeIdentifiers
 import UIKit
 
-/// A session on iPhone and iPad: the remote screen edge to edge, with the
-/// controls floating on glass above it.
+/// A session on iPhone and iPad: the remote screen on all of the display it
+/// can be seen on, and the controls out of its way.
 struct SessionScreen: View {
     @Environment(AppModel.self) private var model
     let session: RemoteSession
@@ -14,16 +14,25 @@ struct SessionScreen: View {
     @State private var showsCurtainPrompt = false
     @State private var showsSettings = false
     @State private var showsCloseConfirmation = false
-    @State private var deckEnabled = false
+    /// Whether the trackpad deck is out. Nil leaves it to how the device is
+    /// being held.
+    @State private var deckChoice: Bool? = SessionScreen.initialDeckChoice
     @State private var hardwareKeyboard = HardwareKeyboardMonitor()
 
     private var bridge: CanvasBridge { session.canvasBridge }
 
+    private static var initialDeckChoice: Bool? {
+        #if DEBUG
+        if DebugAutomation.startsWithDeck { return true }
+        #endif
+        return nil
+    }
+
     /// The trackpad deck appears when asked for, and by itself on a foldable
-    /// held half open like a laptop.
+    /// set down half open like a laptop.
     private func showsDeck(in size: CGSize) -> Bool {
         guard session.isConnected else { return false }
-        return deckEnabled || (bridge.hingeIsPartiallyOpen && size.width > size.height)
+        return deckChoice ?? (bridge.hingeIsPartiallyOpen && size.width > size.height)
     }
 
     var body: some View {
@@ -39,31 +48,45 @@ struct SessionScreen: View {
                         .frame(height: deckHeight)
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
-
-                if session.isConnected {
-                    FloatingToolbar(
-                        session: session,
-                        deckEnabled: $deckEnabled,
-                        showsHardwareKeyboardHint: hardwareKeyboard.isAttached,
-                        onCurtain: toggleCurtain,
-                        onSettings: { showsSettings = true },
-                        onClose: requestClose)
-                        // Keep the toolbar clear of whatever covers the
-                        // bottom of the screen.
-                        .padding(.bottom, max(bridge.keyboardInset, deckHeight))
-                }
             }
             .animation(.smooth(duration: 0.3), value: deckVisible)
             .onChange(of: deckHeight, initial: true) { _, height in
-                bridge.deckInset = height
+                // The picture goes down to the edge of the screen, and
+                // the deck stands on the part the system keeps clear.
+                bridge.deckInset = height > 0 ? height + geometry.safeAreaInsets.bottom : 0
                 bridge.isDeckVisible = height > 0
                 bridge.canvas?.setNeedsLayout()
                 bridge.canvas?.refreshCursorVisibility()
             }
+            .overlay {
+                if session.isConnected {
+                    SessionControls(
+                        session: session,
+                        deckIsOut: deckVisible,
+                        showsHardwareKeyboardHint: hardwareKeyboard.isAttached,
+                        onToggleDeck: { deckChoice = !deckVisible },
+                        onCurtain: toggleCurtain,
+                        onSettings: { showsSettings = true },
+                        onClose: requestClose)
+                        .ignoresSafeArea()
+                }
+            }
         }
         .ignoresSafeArea(.keyboard)
-        .statusBarHidden()
+        .statusBarHidden(!(bridge.chromeLayout?.showsStatusBar ?? false))
+        // The picture is dark at its edges and the status bar is over black.
+        .preferredColorScheme(.dark)
         .persistentSystemOverlays(.hidden)
+        // An edge of the screen is an edge of the remote desktop first: its
+        // Dock, its menu bar. A swipe for the system takes a second try.
+        .defersSystemGestures(on: .all)
+        .onChange(of: bridge.hingeIsPartiallyOpen) { _, isHalfOpen in
+            // Turning the deck away lasts for as long as the device is held
+            // the way that brought it out.
+            if !isHalfOpen, deckChoice == false {
+                deckChoice = nil
+            }
+        }
         .curtainPrompt(for: session, isPresented: $showsCurtainPrompt)
         .sheet(isPresented: $showsSettings) {
             SessionSettingsSheet(session: session)
@@ -145,25 +168,29 @@ struct SessionSettingsSheet: View {
     }
 }
 
-/// The floating controls of a session.
-struct FloatingToolbar: View {
+/// The controls of a session on a touch screen.
+///
+/// The picture is someone's desktop, with a Dock along one edge and a menu
+/// bar along another, and controls left standing over it are in the way of
+/// one of them. So they stand beside the picture where the screen has a
+/// strip the picture cannot use, and everywhere else they are put away to a
+/// small handle as soon as the remote screen is touched.
+struct SessionControls: View {
     @Environment(AppModel.self) private var model
     @Environment(\.horizontalSizeClass) private var sizeClass
     @Environment(\.displayScale) private var displayScale
     let session: RemoteSession
-    @Binding var deckEnabled: Bool
+    let deckIsOut: Bool
     let showsHardwareKeyboardHint: Bool
+    let onToggleDeck: () -> Void
     let onCurtain: () -> Void
     let onSettings: () -> Void
     let onClose: () -> Void
 
-    /// Which edge the toolbar is docked to. It can be dragged between them.
-    private enum Dock {
-        case top, bottom
-    }
-
-    @State private var dock = Dock.bottom
-    @State private var isCollapsed = false
+    /// Whether the controls are out, where they can be put away.
+    @State private var isOut = true
+    /// Whether the controls have been touched since they came out.
+    @State private var wasUsed = false
     @State private var dragOffset = CGSize.zero
     @State private var screenshotURL: URL?
     @State private var showsTypeText = false
@@ -171,48 +198,168 @@ struct FloatingToolbar: View {
     @State private var showsFiles = false
 
     private var bridge: CanvasBridge { session.canvasBridge }
+    private var staysOut: Bool { model.settings.keepsSessionControlsVisible }
+    private var edge: SessionControlsEdge { model.settings.sessionControlsEdge }
+
+    /// How long the controls stay out when a session opens, for someone to
+    /// see that they are there and where they go.
+    private static let introduction: Duration = .seconds(4)
 
     var body: some View {
-        VStack {
-            if dock == .bottom { Spacer(minLength: 0) }
-            content
-                .offset(dragOffset)
-                .gesture(dockingDrag)
-            if dock == .top { Spacer(minLength: 0) }
+        GeometryReader { geometry in
+            let layout = bridge.chromeLayout
+                ?? SessionChromeLayout(size: geometry.size, safeArea: .zero)
+            switch layout.controls {
+            case .strip(let strip):
+                bar(.vertical)
+                    // A status bar shown in the strip is at its top, and the
+                    // screen's corners are at both ends.
+                    .frame(
+                        width: strip.width, height: max(strip.height - 44, 0),
+                        alignment: layout.showsStatusBar ? .bottom : .center)
+                    .position(x: strip.midX, y: strip.midY)
+            case .floating:
+                floating(layout)
+            }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .animation(.smooth(duration: 0.25), value: isOut)
+        .animation(.smooth(duration: 0.25), value: staysOut)
+        .animation(.smooth(duration: 0.3), value: edge)
+        .task(id: session.id) {
+            try? await Task.sleep(for: Self.introduction)
+            if !wasUsed {
+                isOut = false
+            }
+        }
+        .onChange(of: bridge.canvasTouches) {
+            // Back to the remote screen: the controls have done their work.
+            isOut = false
+        }
+        .sheet(item: $screenshotURL) { url in
+            ScreenshotShareSheet(url: url)
+        }
+        .sheet(isPresented: $showsTypeText) {
+            TypeTextSheet(session: session)
+        }
+        .sheet(isPresented: $showsFiles, onDismiss: { session.requestKeyboardFocus() }) {
+            FileBrowserView(computer: session.computer)
+                .environment(model)
+        }
+        .fileImporter(
+            isPresented: $showsFilePicker, allowedContentTypes: [.item, .folder],
+            allowsMultipleSelection: true
+        ) { result in
+            if case .success(let urls) = result {
+                session.sendFiles(urls)
+            }
+            session.requestKeyboardFocus()
+        }
+    }
+
+    // MARK: Over the picture
+
+    private func floating(_ layout: SessionChromeLayout) -> some View {
+        let shown = isOut || staysOut
+        // What covers the bottom of the screen: a keyboard, the deck, or
+        // only the part the system keeps for the home indicator.
+        let covered = max(bridge.bottomObstruction, layout.safeArea.bottom)
+        return VStack(spacing: 0) {
+            if edge == .bottom { Spacer(minLength: 0) }
+            Group {
+                if shown {
+                    bar(.horizontal)
+                        .padding(.top, layout.pictureInsets.top + 8)
+                        .padding(.bottom, covered + 8)
+                } else {
+                    handle
+                        // Beside a sensor housing the handle is mostly
+                        // above the picture, just clear of the housing;
+                        // otherwise it sits on the picture's very edge.
+                        .padding(.top, max(layout.pictureInsets.top - 18, 0))
+                        .padding(.bottom, max(bridge.bottomObstruction, 2))
+                }
+            }
+            .offset(dragOffset)
+            .gesture(edgeDrag)
+            if edge == .top { Spacer(minLength: 0) }
+        }
+        .padding(.leading, layout.pictureInsets.left + 10)
+        .padding(.trailing, layout.pictureInsets.right + 10)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .animation(.smooth(duration: 0.3), value: dock)
-        .animation(.smooth(duration: 0.25), value: isCollapsed)
+    }
+
+    /// What is left of the controls while they are put away.
+    private var handle: some View {
+        Button {
+            wasUsed = true
+            isOut = true
+        } label: {
+            Capsule()
+                .fill(.primary.opacity(0.7))
+                .frame(width: 30, height: 4)
+                .frame(width: 58, height: 16)
+                .glassEffect(.regular.interactive(), in: .capsule)
+                .frame(width: 96, height: 30)
+                .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Show Controls")
+        .transition(.opacity.combined(with: .scale(scale: 0.7)))
+    }
+
+    /// Dragging the controls, or their handle, towards the middle of the
+    /// screen brings them out; dragging them most of the way across moves
+    /// them to the other edge.
+    private var edgeDrag: some Gesture {
+        DragGesture(minimumDistance: 12)
+            .onChanged { value in
+                dragOffset = CGSize(width: 0, height: value.translation.height)
+            }
+            .onEnded { value in
+                let inward = edge == .top
+                    ? value.predictedEndTranslation.height
+                    : -value.predictedEndTranslation.height
+                wasUsed = true
+                withAnimation(.smooth(duration: 0.3)) {
+                    if inward > 220 {
+                        model.settings.sessionControlsEdge = edge == .top ? .bottom : .top
+                    } else if inward > 16 {
+                        isOut = true
+                    }
+                    dragOffset = .zero
+                }
+            }
+    }
+
+    // MARK: The bar
+
+    /// The controls in a row, or one above the other in a strip.
+    private func bar(_ axis: Axis) -> some View {
+        // In a row or column of their own when there is room for all of
+        // them, and one that scrolls when there is not.
+        ViewThatFits(in: axis == .horizontal ? .horizontal : .vertical) {
+            stack(axis)
+            ScrollView(axis == .horizontal ? .horizontal : .vertical, showsIndicators: false) {
+                stack(axis)
+            }
+        }
+        .frame(maxWidth: axis == .horizontal ? 560 : nil)
+        .glassEffect(.regular, in: .capsule)
+        .simultaneousGesture(TapGesture().onEnded { wasUsed = true })
+        .transition(.opacity.combined(with: .scale(scale: 0.9)))
     }
 
     @ViewBuilder
-    private var content: some View {
-        if isCollapsed {
-            Button {
-                isCollapsed = false
-            } label: {
-                Image(systemName: "ellipsis")
-                    .font(.system(size: 18, weight: .semibold))
-                    .frame(width: 46, height: 46)
-                    .contentShape(.circle)
-            }
-            .buttonStyle(.plain)
-            .glassEffect(.regular.interactive(), in: .circle)
-            .accessibilityLabel("Show Controls")
-        } else {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: sizeClass == .compact ? 2 : 6) {
-                    buttons
-                }
+    private func stack(_ axis: Axis) -> some View {
+        let spacing: CGFloat = sizeClass == .compact ? 2 : 6
+        if axis == .horizontal {
+            HStack(spacing: spacing) { buttons }
                 .padding(.horizontal, 8)
                 .padding(.vertical, 5)
-            }
-            .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
-            .fixedSize(horizontal: false, vertical: true)
-            .frame(maxWidth: 560)
-            .glassEffect(.regular, in: .capsule)
+        } else {
+            VStack(spacing: spacing) { buttons }
+                .padding(.horizontal, 5)
+                .padding(.vertical, 8)
         }
     }
 
@@ -238,8 +385,8 @@ struct FloatingToolbar: View {
         }
         .sensoryFeedback(.selection, trigger: session.settings.touchInput)
 
-        ToolbarButton("Trackpad Deck", systemName: "rectangle.bottomhalf.inset.filled", isActive: deckEnabled) {
-            deckEnabled.toggle()
+        ToolbarButton("Trackpad Deck", systemName: "rectangle.bottomhalf.inset.filled", isActive: deckIsOut) {
+            onToggleDeck()
         }
 
         Menu {
@@ -296,55 +443,24 @@ struct FloatingToolbar: View {
                     session.saveToLibrary()
                 }
             }
-            Divider()
-            Button("Hide Controls", systemImage: "chevron.down.circle") {
-                isCollapsed = true
+            if case .floating = bridge.chromeLayout?.controls ?? .floating {
+                Divider()
+                Toggle(isOn: $settings.keepsSessionControlsVisible) {
+                    Label("Keep Controls in View", systemImage: "pin")
+                }
+                Button(
+                    edge == .top ? "Move Controls to the Bottom" : "Move Controls to the Top",
+                    systemImage: edge == .top ? "arrow.down.to.line" : "arrow.up.to.line"
+                ) {
+                    model.settings.sessionControlsEdge = edge == .top ? .bottom : .top
+                }
             }
         } label: {
             ToolbarIcon(systemName: "ellipsis.circle")
         }
         .accessibilityLabel("More")
-        .sheet(item: $screenshotURL) { url in
-            ScreenshotShareSheet(url: url)
-        }
-        .sheet(isPresented: $showsTypeText) {
-            TypeTextSheet(session: session)
-        }
-        .sheet(isPresented: $showsFiles, onDismiss: { session.requestKeyboardFocus() }) {
-            FileBrowserView(computer: session.computer)
-                .environment(model)
-        }
-        .fileImporter(
-            isPresented: $showsFilePicker, allowedContentTypes: [.item, .folder],
-            allowsMultipleSelection: true
-        ) { result in
-            if case .success(let urls) = result {
-                session.sendFiles(urls)
-            }
-            session.requestKeyboardFocus()
-        }
 
         ToolbarButton("Disconnect", systemName: "xmark", tint: .red, action: onClose)
-    }
-
-    /// Dragging the toolbar across the middle of the screen moves it to the
-    /// other edge.
-    private var dockingDrag: some Gesture {
-        DragGesture(minimumDistance: 12)
-            .onChanged { value in
-                dragOffset = CGSize(width: 0, height: value.translation.height)
-            }
-            .onEnded { value in
-                let travelled = value.predictedEndTranslation.height
-                withAnimation(.smooth(duration: 0.3)) {
-                    if dock == .bottom, travelled < -160 {
-                        dock = .top
-                    } else if dock == .top, travelled > 160 {
-                        dock = .bottom
-                    }
-                    dragOffset = .zero
-                }
-            }
     }
 
     private static func writeScreenshot(of session: RemoteSession, scale: CGFloat) -> URL? {
