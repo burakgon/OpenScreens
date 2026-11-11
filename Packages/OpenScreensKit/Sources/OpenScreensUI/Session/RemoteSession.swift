@@ -127,7 +127,7 @@ public final class RemoteSession: Identifiable {
     private var displayAxis: DisplayArrangement.Axis = .sideBySide
     @ObservationIgnored private var lastDisplayScale: CGFloat = 2
     @ObservationIgnored private var didRunConnectActions = false
-    @ObservationIgnored private var lastStatisticsSample: (framesDecoded: UInt64, updates: UInt64, date: Date)?
+    @ObservationIgnored private var lastStatisticsSample: (pictures: [[UInt32: UInt64]], updates: UInt64, date: Date)?
     @ObservationIgnored private lazy var pointerHandler = TouchInputHandler(
         sendPointerEvent: { [weak self] mask, x, y in
             self?.engine.sendPointerEvent(buttonMask: mask, x: x, y: y)
@@ -1037,17 +1037,24 @@ public final class RemoteSession: Identifiable {
             return
         }
         let now = Date.now
+        // The decoder's own total counts tiles, of which a picture can have
+        // four: it reads as 240 frames a second on a desktop doing 60.
+        let pictures = engine.videoSourceFrames.snapshot()
         var framesPerSecond: Double?
         if let last = lastStatisticsSample {
             let interval = now.timeIntervalSince(last.date)
             if interval > 0.2 {
-                let frames = raw.transport.isHighPerformanceMode
-                    ? raw.framesDecoded &- last.framesDecoded
-                    : raw.transport.framebufferUpdateCount &- last.updates
+                let frames: UInt64
+                if raw.transport.isHighPerformanceMode {
+                    // With two displays, the rate is that of the busier one.
+                    frames = VideoSourceFrameCounter.frames(from: last.pictures, to: pictures).max() ?? 0
+                } else {
+                    frames = raw.transport.framebufferUpdateCount &- last.updates
+                }
                 framesPerSecond = Double(frames) / interval
             }
         }
-        lastStatisticsSample = (raw.framesDecoded, raw.transport.framebufferUpdateCount, now)
+        lastStatisticsSample = (pictures, raw.transport.framebufferUpdateCount, now)
         statistics = SessionStatistics(
             quality: activeQuality,
             remoteSize: remoteSize,
