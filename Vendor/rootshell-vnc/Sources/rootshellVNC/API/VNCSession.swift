@@ -1898,13 +1898,29 @@ public final class VNCSession {
         guard configuration.displaySizingMode == .matchClient,
               ProcessInfo.processInfo.environment[
                 "ROOTSHELL_VNC_DISABLE_MATCH_CLIENT"] != "1" else { return nil }
-        let size = RemoteDisplaySize.matching(viewSize: viewSize)
+        let size = RemoteDisplaySize.matching(
+            viewSize: viewSize,
+            minimumPointSize: configuration.matchClientMinimumPointSize)
         if RenderCommitStats.shared != nil, let size {
             VNCLogger(category: "RenderStats").debug(
                 "DISPLAYREQ pixels=\(size.pixelWidth)x\(size.pixelHeight) "
                     + "points=\(size.pointWidth)x\(size.pointHeight)")
         }
         return size
+    }
+
+    /// The desktop, in pixels, that ``DisplaySizingMode/matchClient`` asks
+    /// for to fit a view of this size. Nil when the view has no size.
+    ///
+    /// A client can compare this with ``framebufferWidth`` and
+    /// ``framebufferHeight`` once a resize has had time to happen, to learn
+    /// whether the remote Mac gave the display it was asked for.
+    public static func matchedDisplayPixelSize(
+        viewSize: CGSize,
+        minimumPointSize: CGSize
+    ) -> CGSize? {
+        RemoteDisplaySize.matching(viewSize: viewSize, minimumPointSize: minimumPointSize)
+            .map { CGSize(width: Int($0.pixelWidth), height: Int($0.pixelHeight)) }
     }
 
     public func updateRemoteDisplaySize(

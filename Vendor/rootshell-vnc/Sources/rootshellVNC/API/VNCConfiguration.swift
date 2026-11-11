@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 import RFBProtocol
 import RFBTransport
@@ -262,6 +263,17 @@ public struct VNCConfiguration: Sendable {
     /// What the remote Mac calls the virtual displays it creates for this
     /// session. With two displays each name gets its number appended.
     public var virtualDisplayName: String = "rootshell Virtual Display"
+
+    /// The smallest desktop, in points, that ``DisplaySizingMode/matchClient``
+    /// asks the remote Mac for. A view smaller than this gets a desktop of
+    /// its shape scaled up to it.
+    ///
+    /// The default, 1024×600, is room for any Mac window, and on a phone
+    /// makes for small text and a great many pixels to send: a desktop
+    /// 1024 points wide for a phone held upright is about eight megapixels.
+    /// A smaller minimum gives a smaller desktop with larger text. Values
+    /// below what a Mac accepts, about 640×560, are raised to it.
+    public var matchClientMinimumPointSize = CGSize(width: 1024, height: 600)
 
     /// Whether remote system audio should play on this device.
     ///

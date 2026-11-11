@@ -1687,6 +1687,65 @@ final class RemoteDisplaySizeTests: XCTestCase {
                 pointHeight: 600))
     }
 
+    func testASmallerMinimumMakesAPhonesDesktopSmaller() {
+        // An iPhone held upright, clear of its sensor housing. At the usual
+        // minimum its desktop is so large that the 60 fps limit trims it.
+        let phone = CGSize(width: 402, height: 812)
+        XCTAssertEqual(
+            RemoteDisplaySize.matching(viewSize: phone),
+            RemoteDisplaySize(
+                pixelWidth: 2016, pixelHeight: 4080, pointWidth: 1008, pointHeight: 2040))
+        XCTAssertEqual(
+            RemoteDisplaySize.matching(
+                viewSize: phone, minimumPointSize: CGSize(width: 720, height: 600)),
+            RemoteDisplaySize(
+                pixelWidth: 1440, pixelHeight: 2912, pointWidth: 720, pointHeight: 1456))
+    }
+
+    func testAMinimumAppliesToWhicheverSideIsShort() {
+        // The same phone on its side: the height is what is short.
+        XCTAssertEqual(
+            RemoteDisplaySize.matching(
+                viewSize: CGSize(width: 750, height: 402),
+                minimumPointSize: CGSize(width: 720, height: 600)),
+            RemoteDisplaySize(
+                pixelWidth: 2240, pixelHeight: 1200, pointWidth: 1120, pointHeight: 600))
+    }
+
+    func testAMinimumDoesNothingToAViewAlreadyLarger() {
+        let view = CGSize(width: 1366, height: 1024)
+        XCTAssertEqual(
+            RemoteDisplaySize.matching(
+                viewSize: view, minimumPointSize: CGSize(width: 720, height: 600)),
+            RemoteDisplaySize.matching(viewSize: view))
+    }
+
+    func testAMinimumBelowWhatAMacAcceptsIsRaisedToIt() {
+        // macOS answers a display smaller than about 540 points a side with
+        // one of its own choosing, of another shape.
+        let phone = CGSize(width: 402, height: 812)
+        XCTAssertEqual(
+            RemoteDisplaySize.matching(
+                viewSize: phone, minimumPointSize: CGSize(width: 320, height: 200)),
+            RemoteDisplaySize.matching(
+                viewSize: phone, minimumPointSize: RemoteDisplaySize.smallestMinimumPointSize))
+        XCTAssertEqual(
+            RemoteDisplaySize.matching(
+                viewSize: phone, minimumPointSize: .zero)?.pointWidth,
+            640)
+    }
+
+    @MainActor
+    func testAClientCanLearnWhatSizeWillBeAskedFor() {
+        XCTAssertEqual(
+            VNCSession.matchedDisplayPixelSize(
+                viewSize: CGSize(width: 402, height: 812),
+                minimumPointSize: CGSize(width: 720, height: 600)),
+            CGSize(width: 1440, height: 2912))
+        XCTAssertNil(VNCSession.matchedDisplayPixelSize(
+            viewSize: .zero, minimumPointSize: CGSize(width: 720, height: 600)))
+    }
+
     func testIPadViewportProducesTwoTimesHiDPIFramebuffer() {
         XCTAssertEqual(
             RemoteDisplaySize.matching(

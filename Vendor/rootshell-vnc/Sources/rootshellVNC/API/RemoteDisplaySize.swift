@@ -18,22 +18,37 @@ struct RemoteDisplaySize: Sendable, Equatable {
     let pointWidth: UInt16
     let pointHeight: UInt16
 
+    /// The smallest desktop a view is matched with unless a client asks for
+    /// another: wide enough for any Mac window.
+    static let defaultMinimumPointSize = CGSize(width: 1024, height: 600)
+
+    /// The smallest desktop a client may ask for. macOS 27.2 refuses a
+    /// virtual display narrower than about 540 points or shorter than about
+    /// 540, and answers with a display of its own choosing instead.
+    static let smallestMinimumPointSize = CGSize(width: 640, height: 560)
+
     /// A literal iPhone viewport is too small to be a usable macOS workspace,
-    /// so first expand it to a 1024×600-point minimum while preserving the
-    /// client aspect ratio. Backing density is discrete: Apple recognizes a
-    /// virtual display as HiDPI only when every point is backed by exactly 2×2
-    /// pixels.
-    static func matching(viewSize: CGSize) -> RemoteDisplaySize? {
+    /// so first expand it to a minimum, by default 1024×600 points, while
+    /// preserving the client aspect ratio. Backing density is discrete: Apple
+    /// recognizes a virtual display as HiDPI only when every point is backed
+    /// by exactly 2×2 pixels.
+    static func matching(
+        viewSize: CGSize,
+        minimumPointSize: CGSize = defaultMinimumPointSize
+    ) -> RemoteDisplaySize? {
         guard viewSize.width.isFinite,
               viewSize.height.isFinite,
               viewSize.width >= 1,
               viewSize.height >= 1 else { return nil }
 
         let uiScale = 2
+        let minimum = CGSize(
+            width: max(minimumPointSize.width, smallestMinimumPointSize.width),
+            height: max(minimumPointSize.height, smallestMinimumPointSize.height))
         let workspaceScale = max(
             1,
-            1024 / viewSize.width,
-            600 / viewSize.height)
+            minimum.width / viewSize.width,
+            minimum.height / viewSize.height)
         var pointWidthValue = viewSize.width * workspaceScale
         var pointHeightValue = viewSize.height * workspaceScale
 
