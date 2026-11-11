@@ -296,7 +296,8 @@ extension SSHHandshakeHandler: NIOSSHClientServerAuthenticationDelegate {
         // not the server being slow, so the handshake clock stops meanwhile.
         stopTimer()
         let configuration = self.configuration
-        let decision = validationCompletePromise.futureResult.eventLoop.makePromise(of: Bool.self)
+        // The policy's answer: `nil` to go on, or why the attempt ends here.
+        let decision = validationCompletePromise.futureResult.eventLoop.makePromise(of: SSHError?.self)
         hostKeyDecision = Task {
             let challenge = SSHHostKeyChallenge(
                 host: configuration.host,
@@ -305,9 +306,17 @@ extension SSHHandshakeHandler: NIOSSHClientServerAuthenticationDelegate {
                 verdict: configuration.knownHosts.check(
                     host: configuration.host, port: configuration.port, key: key),
                 knownHosts: configuration.knownHosts)
-            decision.succeed(await configuration.hostKeyPolicy(challenge))
+            if await configuration.hostKeyPolicy(challenge) {
+                decision.succeed(nil)
+            } else if case .storeUnreadable(let reason) = challenge.verdict {
+                // Nothing was wrong with the key that anyone could tell. The
+                // user needs to hear about the record instead.
+                decision.succeed(.knownHostsUnreadable(reason))
+            } else {
+                decision.succeed(.hostKeyRejected(fingerprint: key.fingerprint))
+            }
         }
-        decision.futureResult.assumeIsolated().whenSuccess { isAccepted in
+        decision.futureResult.assumeIsolated().whenSuccess { refusal in
             self.hostKeyDecision = nil
             guard self.phase == .handshaking else {
                 // The attempt ended while the question was open.
@@ -315,11 +324,11 @@ extension SSHHandshakeHandler: NIOSSHClientServerAuthenticationDelegate {
                 return
             }
             self.startTimer()
-            if isAccepted {
+            if let refusal {
+                validationCompletePromise.fail(refusal)
+            } else {
                 self.acceptedHostKey = hostKey
                 validationCompletePromise.succeed(())
-            } else {
-                validationCompletePromise.fail(SSHError.hostKeyRejected(fingerprint: key.fingerprint))
             }
         }
     }

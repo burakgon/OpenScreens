@@ -217,6 +217,8 @@ public final class FileBrowser: Identifiable {
         case .trusted: return true
         case .unknown: expected = nil
         case .mismatch(let onRecord, _): expected = onRecord
+        // Without the record a changed key would look like a new server.
+        case .storeUnreadable: return false
         }
         guard !isClosed else { return false }
         let accepted = await withTaskCancellationHandler {
@@ -234,11 +236,14 @@ public final class FileBrowser: Identifiable {
             }
         }
         guard accepted else { return false }
-        if expected != nil {
-            try? challenge.knownHosts.remove(host: challenge.host, port: challenge.port)
+        do {
+            // Not recorded if the record changed while the user was deciding:
+            // what they agreed to is then no longer the question.
+            return try challenge.trust() == .trusted
+        } catch {
+            // It could not be saved, so the user is asked again next time.
+            return true
         }
-        try? challenge.trust()
-        return true
     }
 
     private func connectionFailed(_ error: any Error) {
@@ -253,6 +258,9 @@ public final class FileBrowser: Identifiable {
                 return
             case .hostKeyRejected:
                 phase = .failed("The connection was stopped because the computer's SSH key was not trusted.")
+                return
+            case .knownHostsUnreadable:
+                phase = .failed("\(error.localizedDescription) \(RemoteSession.trustedServersAdvice)")
                 return
             case .connectionFailed(let detail) where detail.localizedCaseInsensitiveContains("refused"):
                 phase = .failed(computer.kind.isApple

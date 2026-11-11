@@ -195,9 +195,8 @@ public final class AppModel {
             sync.isEnabled = false
             library.eraseThisDeviceOnly()
         }
-        for host in knownHosts.all() {
-            try? knownHosts.remove(host: host.host, port: host.port)
-        }
+        // This also starts the list afresh when it could not be read.
+        try? knownHosts.removeAll()
         PreviewStore.shared.removeAll()
         settings.reset()
         if !everywhere {

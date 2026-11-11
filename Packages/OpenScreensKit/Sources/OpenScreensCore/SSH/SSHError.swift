@@ -15,6 +15,11 @@ public enum SSHError: Error, Equatable, Sendable {
     /// The host key policy declined the key the server presented.
     case hostKeyRejected(fingerprint: String)
 
+    /// The key the server presented was declined because the record of
+    /// trusted host keys could not be read, which leaves nothing to check
+    /// the key against. The text says what is wrong with the record.
+    case knownHostsUnreadable(String)
+
     /// The server did not let this user in.
     case authenticationFailed(AuthenticationFailure)
 
@@ -52,6 +57,8 @@ extension SSHError: LocalizedError {
             "The SSH server did not respond in time."
         case .hostKeyRejected(let fingerprint):
             "The SSH server's identity was not accepted (\(fingerprint))."
+        case .knownHostsUnreadable(let reason):
+            "The SSH server's identity could not be checked. \(reason)"
         case .authenticationFailed(.credentialsRejected):
             "The SSH server rejected the password or key."
         case .authenticationFailed(.noMoreMethods(let serverAccepts)):

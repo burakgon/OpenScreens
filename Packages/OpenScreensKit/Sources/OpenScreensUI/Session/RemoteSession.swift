@@ -462,6 +462,11 @@ public final class RemoteSession: Identifiable {
             expected = nil
         case .mismatch(let onRecord, _):
             expected = onRecord
+        case .storeUnreadable:
+            // Without the record there is no telling a server met for the
+            // first time from one whose key has changed, and the user would
+            // be asked the wrong question. The attempt ends, saying why.
+            return false
         }
         guard !hasEnded else { return false }
         let prompt = HostKeyPrompt(
@@ -480,13 +485,21 @@ public final class RemoteSession: Identifiable {
             }
         }
         guard accepted else { return false }
-        if expected != nil {
-            // The new key replaces the old one rather than joining it.
-            try? challenge.knownHosts.remove(host: challenge.host, port: challenge.port)
+        do {
+            // The key goes on record, in place of an old one if the user was
+            // shown one, unless the record has changed since they were
+            // asked. What they agreed to is then no longer the question.
+            return try challenge.trust() == .trusted
+        } catch {
+            // It could not be saved. The answer stands for this connection,
+            // and the user is asked again at the next.
+            return true
         }
-        try? challenge.trust()
-        return true
     }
+
+    /// What can be done when the list of trusted servers cannot be read.
+    /// Shown after the reason, here and in the file browser.
+    static let trustedServersAdvice = "You can start a new list under SSH Keys in Settings."
 
     /// Continues, or stops, after the user has looked at a host key.
     public func answerHostKey(trust: Bool) {
@@ -514,6 +527,9 @@ public final class RemoteSession: Identifiable {
         case .hostKeyRejected:
             pendingCredentials = nil
             failureMessage = "The connection was stopped because the SSH server's key was not trusted."
+        case .knownHostsUnreadable:
+            pendingCredentials = nil
+            failureMessage = "\(error.localizedDescription) \(Self.trustedServersAdvice)"
         default:
             pendingCredentials = nil
             failureMessage = error.localizedDescription

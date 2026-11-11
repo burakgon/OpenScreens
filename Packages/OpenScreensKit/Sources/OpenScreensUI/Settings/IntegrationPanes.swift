@@ -179,6 +179,8 @@ struct SSHKeysSettingsPane: View {
 
     @State private var keys: [StoredSSHKey] = []
     @State private var hosts: [KnownHostsStore.Entry] = []
+    /// Why the list of trusted servers cannot be shown, when it cannot.
+    @State private var hostsProblem: String?
     @State private var naming: Naming?
     @State private var nameText = ""
     @State private var isImporting = false
@@ -231,7 +233,12 @@ struct SSHKeysSettingsPane: View {
             }
 
             Section {
-                if hosts.isEmpty {
+                if let hostsProblem {
+                    Text(hostsProblem)
+                    Button("Start a New List", systemImage: "arrow.counterclockwise", role: .destructive) {
+                        startNewHostList()
+                    }
+                } else if hosts.isEmpty {
                     Text("None yet")
                         .foregroundStyle(.secondary)
                 }
@@ -241,7 +248,11 @@ struct SSHKeysSettingsPane: View {
             } header: {
                 Text("Trusted Servers")
             } footer: {
-                Text("SSH servers whose keys you chose to trust. Forget one to be shown its key again the next time you connect.")
+                if hostsProblem == nil {
+                    Text("SSH servers whose keys you chose to trust. Forget one to be shown its key again the next time you connect.")
+                } else {
+                    Text("Without this list OpenScreens cannot tell whether a server's key has changed, so it will not connect over SSH. A new list starts empty: you are shown each server's key again the next time you connect, and should check it as you did the first time. The old list is kept as a file beside the new one.")
+                }
             }
         }
         .formStyle(.grouped)
@@ -374,7 +385,22 @@ struct SSHKeysSettingsPane: View {
 
     private func reload() {
         keys = model.sshKeys.keys()
-        hosts = model.knownHosts.all()
+        do {
+            hosts = try model.knownHosts.all()
+            hostsProblem = nil
+        } catch {
+            hosts = []
+            hostsProblem = error.reason
+        }
+    }
+
+    private func startNewHostList() {
+        do {
+            try model.knownHosts.removeAll()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+        reload()
     }
 
     private func finishNaming(_ purpose: Naming) {

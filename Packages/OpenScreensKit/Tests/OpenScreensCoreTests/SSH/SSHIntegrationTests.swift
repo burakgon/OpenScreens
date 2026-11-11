@@ -25,7 +25,7 @@ extension SSHTests {
                 #expect(client.username == server.username)
                 // The ready-made policy put the server's key on record, and it
                 // is the key ssh-keygen says the server has.
-                #expect(knownHosts.all() == [
+                #expect(try knownHosts.all() == [
                     KnownHostsStore.Entry(host: "127.0.0.1", port: server.port, keys: [server.hostKey]),
                 ])
                 #expect(await server.waitForSessionCount(1))
@@ -89,8 +89,7 @@ extension SSHTests {
                 let challenges = Recorder<SSHHostKeyChallenge>()
                 let policy: SSHHostKeyPolicy = { challenge in
                     challenges.record(challenge)
-                    try? challenge.trust()
-                    return true
+                    return (try? challenge.trust()) == .trusted
                 }
 
                 // First encounter: the server is unknown.
@@ -169,7 +168,8 @@ extension SSHTests {
                         knownHosts: knownHosts,
                         hostKeyPolicy: SSHClient.knownHostsPolicy(trustUnknownHosts: false))
                 }
-                #expect(knownHosts.all().isEmpty)
+                let recorded = try knownHosts.all()
+                #expect(recorded.isEmpty)
             }
         }
 
@@ -193,7 +193,47 @@ extension SSHTests {
                     .mismatch(expected: "SHA256:somethingElse", presented: server.hostKey.fingerprint),
                 ])
                 // Trusting unknown hosts does not extend to changed ones.
-                #expect(knownHosts.all().first?.keys == [remembered])
+                #expect(try knownHosts.all().first?.keys == [remembered])
+            }
+        }
+
+        @Test func aRecordThatCannotBeReadStopsTheConnectionAndSaysWhy() async throws {
+            try await PrivateSSHServer.run { server in
+                // The server is on record, with a key it no longer presents,
+                // and then the record goes out of reach.
+                let directory = try TemporaryDirectory()
+                let file = directory.file("KnownHosts.json")
+                let knownHosts = KnownHostsStore(fileURL: file)
+                let remembered = SSHHostKey(type: "ssh-ed25519", fingerprint: "SHA256:somethingElse")
+                try knownHosts.trust(host: "127.0.0.1", port: server.port, key: remembered)
+                try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: file.path)
+
+                // Trusting servers met for the first time does not help it:
+                // nobody can say that this is one.
+                let verdicts = Recorder<KnownHostsStore.Verdict>()
+                let standard = SSHClient.knownHostsPolicy(trustUnknownHosts: true)
+                let error = await #expect(throws: SSHError.self) {
+                    try await server.connect(knownHosts: knownHosts) { challenge in
+                        verdicts.record(challenge.verdict)
+                        return await standard(challenge)
+                    }
+                }
+                guard case .knownHostsUnreadable(let reason) = error else {
+                    Issue.record("expected .knownHostsUnreadable, got \(String(describing: error))")
+                    return
+                }
+                // The user is told what is wrong, and it is not the key.
+                #expect(verdicts.values == [.storeUnreadable(reason: reason)])
+                #expect(reason.hasPrefix("The list of trusted SSH servers could not be read. "))
+                #expect(error?.errorDescription == "The SSH server's identity could not be checked. \(reason)")
+                #expect(await server.waitForSessionCount(0))
+
+                // With the record back, the changed key is the mismatch it
+                // always was.
+                try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
+                await #expect(throws: SSHError.hostKeyRejected(fingerprint: server.hostKey.fingerprint)) {
+                    try await server.connect(knownHosts: knownHosts)
+                }
             }
         }
 

@@ -48,7 +48,7 @@ extension SSHTests {
                     knownHosts: knownHosts,
                     hostKeyPolicy: { challenge in
                         questions.increment()
-                        try? challenge.trust()
+                        _ = try? challenge.trust()
                         return true
                     },
                     timeout: .seconds(15))

@@ -31,9 +31,22 @@ public struct SSHHostKeyChallenge: Sendable {
 
     /// Puts the presented key on record for this server, so that later
     /// connections find it ``KnownHostsStore/Verdict/trusted``. A policy calls
-    /// this before returning `true` when the decision is meant to last.
-    public func trust() throws {
-        try knownHosts.trust(host: host, port: port, key: key)
+    /// this when the decision to accept the key is meant to last, and goes
+    /// by what it returns.
+    ///
+    /// The key is recorded only if the store still says about it what
+    /// ``verdict`` says. Another connection to the same server may have put
+    /// a key on record since the verdict was taken, and a decision made
+    /// before that must not undo it. See
+    /// ``KnownHostsStore/trust(host:port:key:decidedOn:)`` for the rules.
+    ///
+    /// - Returns: `.trusted` when the key is on record. Anything else is the
+    ///   store's verdict as it now stands, which did not allow recording the
+    ///   key: the connection should not go on as if it had.
+    /// - Throws: When the key should have been recorded and could not be
+    ///   written.
+    public func trust() throws -> KnownHostsStore.Verdict {
+        try knownHosts.trust(host: host, port: port, key: key, decidedOn: verdict)
     }
 }
 
@@ -243,6 +256,7 @@ public final class SSHClient: Sendable {
     /// - A server met for the first time is accepted only when
     ///   `trustUnknownHosts` is `true`, and its key is then put on record.
     /// - A key that differs from the one on record is always refused.
+    /// - While the record cannot be read, every key is refused.
     ///
     /// An app that can ask the user writes its own policy for the unknown and
     /// mismatch cases and falls back on this one for the rest.
@@ -253,11 +267,18 @@ public final class SSHClient: Sendable {
                 return true
             case .unknown:
                 guard trustUnknownHosts else { return false }
-                // If the key cannot be saved the server simply stays unknown,
-                // and is accepted on the same terms next time.
-                try? challenge.trust()
-                return true
-            case .mismatch:
+                do {
+                    // Unknown is what the server was when this connection
+                    // looked. If another connection has put a different key
+                    // on record since, this one is no longer a first
+                    // encounter, and its key is not recorded over the other.
+                    return try challenge.trust() == .trusted
+                } catch {
+                    // The key could not be saved. The server simply stays
+                    // unknown, and is accepted on the same terms next time.
+                    return true
+                }
+            case .mismatch, .storeUnreadable:
                 return false
             }
         }
