@@ -98,14 +98,14 @@ that comes with the project, so nobody's real screen is on show.</sub>
 
 ## Install
 
-**Mac** — download the latest `OpenScreens.dmg` from
-[Releases](https://github.com/burakgon/OpenScreens/releases/latest), open it
+**Mac** — download the disk image from the latest
+[release](https://github.com/burakgon/OpenScreens/releases/latest), open it
 and drag OpenScreens to Applications. The app is signed with a Developer ID
 and notarised by Apple. Requires macOS 26 or later.
 
-**iPhone and iPad** — a TestFlight beta is running; until it is opened to
-everyone, [build it yourself](#building-from-source). Requires iOS or iPadOS
-26 or later.
+**iPhone and iPad** — not on the App Store yet. Until the TestFlight beta
+opens, [build it yourself](#building-from-source). Requires iOS or iPadOS 26
+or later.
 
 ## Getting started
 
