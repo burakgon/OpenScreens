@@ -103,10 +103,14 @@ struct FileTransferOverlay: View {
         for transfer in transfers where transfer.direction == .upload && !transfer.isActive {
             session.releaseSentFiles(of: transfer.id)
         }
+        for transfer in transfers where transfer.direction == .download && !transfer.isActive {
+            // What arrived is kept even when not everything did.
+            session.keepFetchedFiles(of: transfer)
+        }
         for transfer in transfers where transfer.state == .completed {
             switch transfer.direction {
             case .download:
-                session.keepFetchedFiles(of: transfer)
+                break
             case .upload:
                 guard !hidden.contains(transfer.id), !leaving.contains(transfer.id) else { continue }
                 let id = transfer.id
@@ -255,7 +259,7 @@ private struct FileTransferRow: View {
             if transfer.isActive {
                 iconButton("Cancel", systemName: "xmark.circle.fill", action: onCancel)
             } else {
-                if transfer.direction == .download, transfer.state == .completed, !kept.isEmpty {
+                if transfer.direction == .download, !kept.isEmpty {
                     #if os(macOS)
                     iconButton("Show in Finder", systemName: "magnifyingglass.circle.fill") {
                         NSWorkspace.shared.activateFileViewerSelecting(kept)
