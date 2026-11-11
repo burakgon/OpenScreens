@@ -848,7 +848,10 @@ private final class FakeHangingTailscale {
             try await TailscaleCommandLine.run(
                 URL(fileURLWithPath: "/bin/sleep"), arguments: ["600"], timeout: .milliseconds(300))
         }
-        #expect(clock.now - started < .seconds(5))
+        // Long before the tool would have finished by itself. How long
+        // stopping it takes is the machine's business: a busy one has taken
+        // seven seconds over it.
+        #expect(clock.now - started < .seconds(60))
     }
 
     @Test func cancellingTheTaskStopsTheTool() async {
@@ -864,7 +867,8 @@ private final class FakeHangingTailscale {
         #expect(throws: CancellationError.self) {
             try result.get()
         }
-        #expect(clock.now - started < .seconds(5))
+        // Long before either the tool or its time limit would have ended it.
+        #expect(clock.now - started < .seconds(60))
     }
 
     @Test func aTaskCancelledBeforehandNeverStartsTheTool() async {
