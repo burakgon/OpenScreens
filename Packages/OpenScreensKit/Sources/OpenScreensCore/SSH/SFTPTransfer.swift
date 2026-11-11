@@ -82,7 +82,7 @@ extension SFTPClient {
                     unvisited.append((childPath, childURL))
                 } else if entry.attributes.isRegularFile {
                     files.append((childPath, childURL))
-                    total += Int64(clamping: entry.attributes.size ?? 0)
+                    total = total.addingClamped(Int64(clamping: entry.attributes.size ?? 0))
                 }
             }
         }
@@ -92,12 +92,13 @@ extension SFTPClient {
         progress?(0, expectedTotal)
         for file in files {
             let previouslyCompleted = completed
-            completed += try await downloadFile(
+            let received = try await downloadFile(
                 remotePath: file.remotePath, to: file.localURL
             ) { received, _ in
-                let overall = previouslyCompleted + received
+                let overall = previouslyCompleted.addingClamped(received)
                 progress?(overall, max(expectedTotal, overall))
             }
+            completed = completed.addingClamped(received)
         }
     }
 
@@ -130,7 +131,7 @@ extension SFTPClient {
                     unvisited.append((child.url, childPath))
                 case .file(let size):
                     files.append((child.url, childPath))
-                    total += size
+                    total = total.addingClamped(size)
                 case .other:
                     break
                 }
@@ -145,12 +146,13 @@ extension SFTPClient {
         progress?(0, expectedTotal)
         for file in files {
             let previouslyCompleted = completed
-            completed += try await uploadFile(
+            let sent = try await uploadFile(
                 localURL: file.localURL, to: file.remotePath
             ) { sent, _ in
-                let overall = previouslyCompleted + sent
+                let overall = previouslyCompleted.addingClamped(sent)
                 progress?(overall, max(expectedTotal, overall))
             }
+            completed = completed.addingClamped(sent)
         }
     }
 
@@ -243,9 +245,11 @@ extension SFTPClient {
                     continue
                 }
 
+                // The write refuses a position past what a file can have,
+                // so the sums on offsets below stay far inside 64 bits.
                 try file.write(data, at: chunk.offset)
                 let count = data.readableBytes
-                received += Int64(count)
+                received = received.addingClamped(Int64(count))
                 writtenEnd = max(writtenEnd, chunk.offset + UInt64(count))
                 progress?(received, expectedSize.map { max($0, received) })
 
@@ -411,6 +415,18 @@ final class LocalFile {
         return Int64(status.st_size)
     }
 
+    /// Where a run of `length` bytes at `offset` starts, as the system counts
+    /// positions in a file. A run that would end past the largest position
+    /// there is cannot be read or written, and is refused the way the system
+    /// refuses a file that is too large.
+    private func position(of offset: UInt64, length: Int) throws(SFTPError) -> off_t {
+        guard let start = off_t(exactly: offset),
+              !start.addingReportingOverflow(off_t(length)).overflow else {
+            throw Self.failure(path: path, code: EFBIG)
+        }
+        return start
+    }
+
     /// Reads up to `maximumLength` bytes at `offset` onto the end of `buffer`.
     /// - Returns: The number of bytes read; zero at the end of the file.
     func read(
@@ -418,11 +434,12 @@ final class LocalFile {
         maximumLength: Int,
         at offset: UInt64
     ) throws(SFTPError) -> Int {
+        let start = try position(of: offset, length: maximumLength)
         var failure: SFTPError?
         let count = buffer.writeWithUnsafeMutableBytes(minimumWritableBytes: maximumLength) { space in
             while true {
                 let count = pread(
-                    descriptor, space.baseAddress, min(maximumLength, space.count), off_t(offset))
+                    descriptor, space.baseAddress, min(maximumLength, space.count), start)
                 if count >= 0 { return count }
                 if errno != EINTR {
                     failure = Self.failure(path: path, code: errno)
@@ -438,13 +455,14 @@ final class LocalFile {
 
     /// Writes all of `buffer` at `offset`.
     func write(_ buffer: ByteBuffer, at offset: UInt64) throws(SFTPError) {
+        let start = try position(of: offset, length: buffer.readableBytes)
         var failure: SFTPError?
         buffer.withUnsafeReadableBytes { bytes in
             var written = 0
             while written < bytes.count {
                 let count = pwrite(
                     descriptor, bytes.baseAddress.map { $0 + written }, bytes.count - written,
-                    off_t(offset) + off_t(written))
+                    start + off_t(written))
                 if count > 0 {
                     written += count
                 } else if count == 0 || errno != EINTR {

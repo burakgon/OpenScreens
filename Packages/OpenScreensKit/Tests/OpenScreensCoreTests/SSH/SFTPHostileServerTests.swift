@@ -110,6 +110,44 @@ extension SSHTests {
                 await client.close()
             }
         }
+
+        // MARK: Sizes
+
+        /// Each size fits in 63 bits. Their sum does not.
+        @Test func sizesThatDoNotAddUpDoNotStopADownload() async throws {
+            try await SFTPTestServer.run { server in
+                let local = try TemporaryDirectory()
+                server.volume.addFile("a.bin", contents: Data("first".utf8)) { $0.claimedSize = UInt64(Int64.max) }
+                server.volume.addFile("b.bin", contents: Data("second".utf8)) { $0.claimedSize = UInt64(Int64.max) }
+                server.volume.addFile("c.bin", contents: Data("third".utf8)) { $0.claimedSize = .max }
+
+                let client = try await server.connect()
+                let sftp = try await client.openSFTP()
+                #expect(try await sftp.list("/").map(\.size) == [.max, .max, .max])
+
+                let copy = local.file("copy")
+                let progress = Recorder<[Int64?]>()
+                try await sftp.downloadDirectory(remotePath: "/", to: copy) { completed, total in
+                    progress.record([completed, total])
+                }
+                #expect(try Self.names(in: copy) == ["a.bin", "b.bin", "c.bin"])
+                #expect(try Data(contentsOf: copy.appending(path: "b.bin")) == Data("second".utf8))
+                // The total is as large as a total gets, and what arrived is
+                // counted for what it was.
+                #expect(progress.values.first == [0, .max])
+                #expect(progress.values.last == [16, .max])
+
+                // One file on its own, with a size that is past even that.
+                let single = local.file("single.bin")
+                let singleProgress = Recorder<[Int64?]>()
+                try await sftp.download(remotePath: "/c.bin", to: single) { completed, total in
+                    singleProgress.record([completed, total])
+                }
+                #expect(try Data(contentsOf: single) == Data("third".utf8))
+                #expect(singleProgress.values.last == [5, .max])
+                await client.close()
+            }
+        }
     }
 }
 

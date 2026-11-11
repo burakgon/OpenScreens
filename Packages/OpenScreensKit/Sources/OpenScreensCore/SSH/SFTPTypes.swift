@@ -239,3 +239,17 @@ public enum SFTPPath {
         return resolved
     }
 }
+
+extension Int64 {
+    /// The sum of this and `other`, or the value nearest to it when the true
+    /// sum does not fit.
+    ///
+    /// Sizes are added this way. A size comes from the other end of a
+    /// connection, or from a file that may be mostly holes, and two of them
+    /// can each be in range without their sum being.
+    func addingClamped(_ other: Int64) -> Int64 {
+        let (sum, overflowed) = addingReportingOverflow(other)
+        guard overflowed else { return sum }
+        return other < 0 ? .min : .max
+    }
+}
