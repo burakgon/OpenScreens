@@ -91,9 +91,11 @@ public typealias SSHHostKeyPolicy = @Sendable (SSHHostKeyChallenge) async -> Boo
 /// client and everything opened from it have been let go.
 ///
 /// The connection is made with Network.framework, so it follows the system's
-/// routing, VPN and proxy configuration on both iOS and macOS. TCP keepalive
-/// is on: a server that goes silent is noticed after about 80 seconds, and
-/// the probes keep NAT mappings alive while a session sits idle.
+/// routing, VPN and proxy configuration on both iOS and macOS. A server that
+/// goes silent is noticed after about 80 seconds, whether the connection was
+/// idle or had data on its way: TCP keepalive is on for the first case, and
+/// its probes keep NAT mappings alive while a session sits idle; the system
+/// is told to give up retrying after as long for the second.
 ///
 /// A server may replace the connection's encryption keys whenever it sees
 /// fit, typically after so much data or time (`RekeyLimit` in OpenSSH).
@@ -255,22 +257,32 @@ public final class SSHClient: Sendable {
     }
 
     private static func bootstrap(timeout: TimeAmount) -> NIOTSConnectionBootstrap {
-        let tcpOptions = NWProtocolTCP.Options()
-        tcpOptions.noDelay = true
-        tcpOptions.connectionTimeout = Int(timeout.nanoseconds / 1_000_000_000)
-        // Probe after 20 idle seconds, then every 10; six misses in a row end
-        // the connection. Tolerant enough for a flaky wireless leg.
-        tcpOptions.enableKeepalive = true
-        tcpOptions.keepaliveIdle = 20
-        tcpOptions.keepaliveInterval = 10
-        tcpOptions.keepaliveCount = 6
-
-        return NIOTSConnectionBootstrap(group: eventLoopGroup)
+        NIOTSConnectionBootstrap(group: eventLoopGroup)
             .connectTimeout(timeout)
             .withQoS(.userInitiated)
-            .tcpOptions(tcpOptions)
+            .tcpOptions(tcpOptions(timeout: timeout))
             .channelOption(NIOTSChannelOptions.maximumReceiveLength, value: maximumReceiveLength)
             .configureNWParameters { $0.serviceClass = .responsiveData }
+    }
+
+    /// How the connection's TCP is set up.
+    static func tcpOptions(timeout: TimeAmount) -> NWProtocolTCP.Options {
+        let options = NWProtocolTCP.Options()
+        options.noDelay = true
+        options.connectionTimeout = Int(timeout.nanoseconds / 1_000_000_000)
+        // Probe after 20 idle seconds, then every 10; six misses in a row end
+        // the connection. Tolerant enough for a flaky wireless leg.
+        options.enableKeepalive = true
+        options.keepaliveIdle = 20
+        options.keepaliveInterval = 10
+        options.keepaliveCount = 6
+        // Keepalive only speaks up when nothing else is waiting to be said.
+        // With data on its way to a peer that has stopped acknowledging it,
+        // the system retries instead, and left to itself goes on doing so
+        // for many minutes. It gets the same 80 seconds.
+        options.connectionDropTime = options.keepaliveIdle
+            + options.keepaliveInterval * options.keepaliveCount
+        return options
     }
 
     /// The standard trust-on-first-use policy.
