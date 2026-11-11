@@ -12,6 +12,7 @@ import SwiftUI
 ///     OPENSCREENS_CONNECT=vnc://user:password@host   open this address
 ///     OPENSCREENS_QUALITY=highPerformance|standard|fullQuality
 ///     OPENSCREENS_RESOLUTION=matchWindow|remote
+///     OPENSCREENS_MORE_SPACE=1                        a desktop at least 1024 points wide
 ///     OPENSCREENS_DISPLAYS=single|allCombined|twoVirtual
 ///     OPENSCREENS_KEYBOARD=automatic|keystrokes|unicode
 ///     OPENSCREENS_OBSERVE=1                           watch without sending input
@@ -19,6 +20,7 @@ import SwiftUI
 ///     OPENSCREENS_LOCK_ON_DISCONNECT=1                lock the remote Mac on leaving
 ///     OPENSCREENS_TOUCH=trackpad|touch                how touches drive the pointer
 ///     OPENSCREENS_DECK=1                              start with the trackpad deck out
+///     OPENSCREENS_STATISTICS=1                        show the statistics overlay
 ///     OPENSCREENS_SECTION=favorites|recents|nearby|tailscale   open the library there
 ///     OPENSCREENS_TRUST_HOST_KEY=1                    accept the SSH server's key when asked
 ///     OPENSCREENS_SSH_PASSWORD=secret                 answer the SSH sign-in when asked
@@ -57,6 +59,9 @@ enum DebugAutomation {
               let address = environment["OPENSCREENS_CONNECT"],
               var target = ConnectionTarget(text: address) else { return }
         didStart = true
+        if environment["OPENSCREENS_STATISTICS"] == "1" {
+            model.settings.showsStatisticsOverlay = true
+        }
         if let level = environment["OPENSCREENS_ENGINE_LOG"] {
             // The engine logs privately to the system log, which cannot be
             // read back; this is the same stream on standard error.
@@ -79,6 +84,7 @@ enum DebugAutomation {
             if let resolution = environment["OPENSCREENS_RESOLUTION"].flatMap(ResolutionMode.init(rawValue:)) {
                 settings.resolution = resolution
             }
+            settings.moreSpace = environment["OPENSCREENS_MORE_SPACE"] == "1"
             if let displays = environment["OPENSCREENS_DISPLAYS"].flatMap(DisplayLayout.init(rawValue:)) {
                 settings.displays = displays
             }
@@ -546,6 +552,9 @@ enum DebugAutomation {
             report["framesPerSecond"] = statistics.framesPerSecond ?? -1
             report["bitrateKbps"] = statistics.bitrateKbps ?? -1
             report["packetLossPercent"] = statistics.packetLossPercent ?? -1
+            if let hardware = statistics.usesHardwareDecoder {
+                report["hardwareDecoder"] = hardware
+            }
         }
         report["diagnostics"] = session.engine.getDiagnostics().summary()
 

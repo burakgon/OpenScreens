@@ -1168,7 +1168,8 @@ public final class RemoteSession: Identifiable {
             uptime: raw.transport.connectionUptime,
             encryption: computer.ssh.isEnabled
                 ? "SSH tunnel"
-                : Self.describe(engine.negotiatedContentEncryption))
+                : Self.describe(engine.negotiatedContentEncryption),
+            usesHardwareDecoder: raw.usesHardwareVideoDecoder)
     }
 
     // MARK: - Files dragged to and from a Mac
@@ -1401,6 +1402,9 @@ public struct SessionStatistics: Equatable, Sendable {
     public var bandwidthEstimateKbps: Double?
     public var uptime: TimeInterval?
     public var encryption: String?
+    /// Whether this device decodes the video in hardware; nil when there is
+    /// no video stream or that is not known.
+    public var usesHardwareDecoder: Bool?
 }
 
 /// Carries fractional scroll distance from one sample to the next so slow

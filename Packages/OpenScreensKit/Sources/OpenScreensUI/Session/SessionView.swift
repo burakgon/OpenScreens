@@ -89,6 +89,11 @@ struct StatisticsOverlay: View {
                 if let delay = statistics.queueDelayMilliseconds, statistics.quality == .highPerformance {
                     row("Delay", "\(Int(delay.rounded())) ms")
                 }
+                if let hardware = statistics.usesHardwareDecoder {
+                    // Software means this device cannot decode the stream
+                    // in hardware, and nothing else matters as much.
+                    row("Decoder", hardware ? "Hardware" : "Software")
+                }
                 if let encryption = statistics.encryption {
                     row("Security", encryption)
                 }
