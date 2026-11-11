@@ -1,4 +1,5 @@
 import CoreGraphics
+import Foundation
 import Testing
 @testable import OpenScreensCore
 
@@ -165,5 +166,119 @@ struct HingePostureTests {
         #expect(HingePosture.isLaptopLike(isPartiallyOpen: true, angle: 0))
         #expect(HingePosture.isLaptopLike(isPartiallyOpen: true, angle: .nan))
         #expect(HingePosture.isLaptopLike(isPartiallyOpen: true, angle: -1))
+    }
+}
+
+@Suite("Flip-flop guard")
+struct FlipFlopGuardTests {
+    private let portrait = SessionChromeLayout(
+        size: CGSize(width: 466, height: 678),
+        safeArea: Viewport.Insets(top: 0, left: 0, bottom: 34, right: 84))
+    private let other = SessionChromeLayout(
+        size: CGSize(width: 466, height: 678),
+        safeArea: Viewport.Insets(top: 54, left: 0, bottom: 34, right: 0))
+    private let landscape = SessionChromeLayout(
+        size: CGSize(width: 874, height: 402),
+        safeArea: Viewport.Insets(top: 0, left: 62, bottom: 20, right: 62))
+
+    /// What version 1.1.0 did on a device it had not been tried on: two
+    /// layouts, each of which brought the other back, in one unbroken run
+    /// on the main thread. However long that goes on, only a handful of
+    /// changes may come of it.
+    @Test func twoLayoutsUndoingEachOtherAreStopped() {
+        var flipFlop = FlipFlopGuard<SessionChromeLayout>()
+        var current: SessionChromeLayout?
+        var changes = 0
+        var time: TimeInterval = 100
+        for pass in 0..<10_000 {
+            let wanted = pass.isMultiple(of: 2) ? portrait : other
+            if flipFlop.admits(wanted, replacing: current, at: time) {
+                current = wanted
+                changes += 1
+            }
+            time += 0.0002
+        }
+        // Two seconds of it, and all but the first moments of them held.
+        #expect(changes <= 6)
+    }
+
+    /// And if whatever set them against each other is still there when the
+    /// hold is over, it is stopped again, as often as it takes.
+    @Test func anOscillationThatGoesOnIsStoppedEveryTime() {
+        var flipFlop = FlipFlopGuard<SessionChromeLayout>()
+        var current: SessionChromeLayout?
+        var changes = 0
+        var time: TimeInterval = 0
+        // A minute of a change wanted sixty times a second.
+        for pass in 0..<3600 {
+            let wanted = pass.isMultiple(of: 2) ? portrait : other
+            if flipFlop.admits(wanted, replacing: current, at: time) {
+                current = wanted
+                changes += 1
+            }
+            time += 1.0 / 60
+        }
+        #expect(changes < 100)
+    }
+
+    @Test func aLayoutThatIsAlreadyInPlaceChangesNothing() {
+        var flipFlop = FlipFlopGuard<SessionChromeLayout>()
+        let first = flipFlop.admits(portrait, replacing: nil, at: 0)
+        let again = flipFlop.admits(portrait, replacing: portrait, at: 0.1)
+        #expect(first)
+        #expect(!again)
+    }
+
+    /// Turning a device on its side and back is a layout returning, too.
+    @Test func turningADeviceOverAndBackIsLetThrough() {
+        var flipFlop = FlipFlopGuard<SessionChromeLayout>()
+        var current: SessionChromeLayout?
+        var time: TimeInterval = 0
+        var refused = 0
+        for turn in 0..<40 {
+            let wanted = turn.isMultiple(of: 2) ? portrait : landscape
+            if flipFlop.admits(wanted, replacing: current, at: time) {
+                current = wanted
+            } else {
+                refused += 1
+            }
+            // Nobody turns a device over more than once or so a second.
+            time += 0.8
+        }
+        #expect(refused == 0)
+        #expect(current == landscape)
+    }
+
+    @Test func valuesThatDoNotComeBackAreNeverHeld() {
+        var flipFlop = FlipFlopGuard<Int>()
+        var current: Int?
+        var refused = 0
+        for value in 0..<1000 {
+            if flipFlop.admits(value, replacing: current, at: Double(value) * 0.001) {
+                current = value
+            } else {
+                refused += 1
+            }
+        }
+        #expect(refused == 0)
+    }
+
+    @Test func aHoldEnds() {
+        var flipFlop = FlipFlopGuard<Int>(tolerance: 1, window: 2, hold: 5)
+        var current: Int?
+        var time: TimeInterval = 0
+        var admitted: [Bool] = []
+        for value in [1, 2, 1, 2] {
+            let result = flipFlop.admits(value, replacing: current, at: time)
+            if result { current = value }
+            admitted.append(result)
+            time += 0.01
+        }
+        // 1, 2, back to 1 once, and then no more.
+        #expect(admitted == [true, true, true, false])
+        let duringHold = flipFlop.admits(2, replacing: current, at: 3)
+        #expect(!duringHold)
+        let afterHold = flipFlop.admits(2, replacing: current, at: 6)
+        #expect(afterHold)
     }
 }

@@ -72,6 +72,10 @@ public final class RemoteCanvasView: UIView {
     /// Tells the SwiftUI layer when the on-screen keyboard is shown or hidden.
     var onKeyboardVisibilityChange: ((Bool) -> Void)?
 
+    /// Keeps two layouts of the screen from replacing each other without
+    /// end. See ``publish(_:)``.
+    private var layoutGuard = FlipFlopGuard<SessionChromeLayout>()
+
     public init(session: RemoteSession) {
         self.session = session
         super.init(frame: .zero)
@@ -187,10 +191,10 @@ public final class RemoteCanvasView: UIView {
         if session.viewport.backingScale != scale {
             session.viewport.backingScale = scale
         }
-        let layout = chromeLayout()
-        if session.canvasBridge.chromeLayout != layout {
-            session.canvasBridge.chromeLayout = layout
-        }
+        publish(chromeLayout())
+        // What was given out, which while two layouts are undoing each
+        // other is not the one just worked out.
+        let layout = session.canvasBridge.chromeLayout ?? chromeLayout()
         let insets = layout.pictureInsets
         // The desktop is sized for the screen with nothing covering it. A
         // keyboard or trackpad deck neither resizes the remote desktop,
@@ -211,6 +215,19 @@ public final class RemoteCanvasView: UIView {
             }
         }
         session.viewDidResize(to: uncovered, displayScale: scale)
+    }
+
+    /// Gives the interface around the canvas a new layout of the screen,
+    /// unless it would be one of two that keep replacing each other.
+    ///
+    /// The layout is worked out from what the system reports about the
+    /// screen, and is meant never to change any of that. Should it do so
+    /// on some device after all, this is what keeps the app answering.
+    private func publish(_ layout: SessionChromeLayout) {
+        let bridge = session.canvasBridge
+        if layoutGuard.admits(layout, replacing: bridge.chromeLayout, at: CACurrentMediaTime()) {
+            bridge.chromeLayout = layout
+        }
     }
 
     /// Where the picture and the controls go on this screen as it is now.
