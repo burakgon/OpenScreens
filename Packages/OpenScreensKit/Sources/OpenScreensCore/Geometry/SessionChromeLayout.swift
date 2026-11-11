@@ -43,6 +43,9 @@ public struct SessionChromeLayout: Equatable, Sendable {
     /// - Parameters:
     ///   - size: The whole screen, or window.
     ///   - safeArea: What the system keeps content out of, at each edge.
+    ///   - cornerTop: How far from the top the system would start content
+    ///     that the screen's rounded corners must not cut into; no more
+    ///     than the safe area's own top where that already clears them.
     ///   - statusBar: Where the status bar is drawn, in the screen's
     ///     coordinates; empty when it is hidden.
     ///   - sensorSide: The side the sensor housing is on when the screen is
@@ -51,6 +54,7 @@ public struct SessionChromeLayout: Equatable, Sendable {
     public init(
         size: CGSize,
         safeArea: Viewport.Insets,
+        cornerTop: CGFloat = 0,
         statusBar: CGRect = .zero,
         sensorSide: Side? = nil
     ) {
@@ -61,8 +65,15 @@ public struct SessionChromeLayout: Equatable, Sendable {
         // by itself is not, since it is hidden while it has no place of its
         // own; staying clear of it would also mean a desktop made once for
         // the screen with the bar and again for the screen without.
+        //
+        // The top of a Mac's screen is its menu bar, with the Apple menu in
+        // one corner and the clock in the other, and a screen with rounded
+        // corners cuts into both. The picture starts as far down as the
+        // system would start anything that has to be seen whole.
+        let housing = safeArea.top >= Self.shallowestHousing ? safeArea.top : 0
+        let corners = cornerTop > safeArea.top ? cornerTop : 0
         pictureInsets = Viewport.Insets(
-            top: safeArea.top >= Self.shallowestHousing ? safeArea.top : 0,
+            top: max(housing, corners),
             left: safeArea.left, bottom: 0, right: safeArea.right)
 
         let widest = max(safeArea.left, safeArea.right)

@@ -273,9 +273,13 @@ struct SessionControls: View {
                 } else {
                     handle
                         // Beside a sensor housing the handle is mostly
-                        // above the picture, just clear of the housing;
-                        // otherwise it sits on the picture's very edge.
-                        .padding(.top, max(layout.pictureInsets.top - 18, 0))
+                        // above the picture, just clear of the housing.
+                        // Anywhere else it sits on the top of the picture,
+                        // and not above it: the strip left clear for a
+                        // screen's corners is the system's to take taps in.
+                        .padding(.top, layout.pictureInsets.top >= SessionChromeLayout.shallowestHousing
+                            ? layout.pictureInsets.top - 18
+                            : layout.pictureInsets.top)
                         .padding(.bottom, max(bridge.bottomObstruction, 2))
                 }
             }

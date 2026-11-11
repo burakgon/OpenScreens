@@ -233,6 +233,9 @@ public final class RemoteCanvasView: UIView {
                 left: safeAreaInsets.left,
                 bottom: safeAreaInsets.bottom,
                 right: safeAreaInsets.right),
+            // What the system keeps clear so as to stay out of the screen's
+            // rounded corners by moving down rather than in from the sides.
+            cornerTop: edgeInsets(for: .safeArea(cornerAdaptation: .vertical)).top,
             statusBar: statusBar,
             sensorSide: sensorSide)
     }

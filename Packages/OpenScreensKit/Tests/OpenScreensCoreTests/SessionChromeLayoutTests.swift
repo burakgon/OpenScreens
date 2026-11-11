@@ -36,6 +36,39 @@ struct SessionChromeLayoutTests {
         #expect(!layout.showsStatusBar)
     }
 
+    @Test func thePictureStartsBelowWhatTheScreensCornersCutInto() {
+        // An iPhone Duo's inner display: nothing in the way at the top, but
+        // corners that would take the Apple menu and the clock.
+        let inner = SessionChromeLayout(
+            size: CGSize(width: 951, height: 669), safeArea: insets(0, 0, 34, 0), cornerTop: 16)
+        #expect(inner.pictureInsets == insets(16, 0, 0, 0))
+        #expect(!inner.showsStatusBar)
+
+        // Its cover display, with the strip down its side as well.
+        let cover = SessionChromeLayout(
+            size: CGSize(width: 466, height: 678), safeArea: insets(0, 0, 34, 84), cornerTop: 17.5)
+        #expect(cover.pictureInsets == insets(17.5, 0, 0, 84))
+
+        // A sensor housing is deeper than any corner: nothing changes.
+        let phone = SessionChromeLayout(
+            size: CGSize(width: 402, height: 874), safeArea: insets(62, 0, 34, 0), cornerTop: 62)
+        #expect(phone.pictureInsets == insets(62, 0, 0, 0))
+    }
+
+    @Test func cornersAlreadyClearedByAStatusBarAskForNothingMore() {
+        // An iPad whose status bar is still showing: the bar clears the
+        // corners, and is about to be hidden. Not a reason to make a
+        // desktop for the screen with the bar.
+        let layout = SessionChromeLayout(
+            size: CGSize(width: 1032, height: 1376), safeArea: insets(24, 0, 20, 0), cornerTop: 24)
+        #expect(layout.pictureInsets == .zero)
+
+        // Once it is hidden the corners are what is left.
+        let hidden = SessionChromeLayout(
+            size: CGSize(width: 1032, height: 1376), safeArea: insets(0, 0, 20, 0), cornerTop: 9.5)
+        #expect(hidden.pictureInsets == insets(9.5, 0, 0, 0))
+    }
+
     // MARK: The status bar
 
     @Test func theStatusBarIsShownWhereItHasAPlaceOfItsOwn() {

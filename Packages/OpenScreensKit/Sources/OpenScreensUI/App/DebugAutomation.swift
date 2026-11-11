@@ -546,6 +546,10 @@ enum DebugAutomation {
             report["safeArea"] = [layout.safeArea.top, layout.safeArea.left, layout.safeArea.bottom, layout.safeArea.right]
             report["controls"] = String(describing: layout.controls)
             report["showsStatusBar"] = layout.showsStatusBar
+            report["pictureInsets"] = [
+                layout.pictureInsets.top, layout.pictureInsets.left,
+                layout.pictureInsets.bottom, layout.pictureInsets.right,
+            ]
         }
         #endif
         if let statistics = session.statistics {
