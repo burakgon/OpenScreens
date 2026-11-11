@@ -7,10 +7,21 @@
 # Signing and notarisation go through the Apple ID that Xcode is signed in
 # with, for the team in Config/Signing.xcconfig. Nothing is uploaded anywhere
 # but Apple's notary service; publishing the disk image is a separate step.
+#
+# An App Store Connect API key can stand in for the Apple ID:
+#
+#   APP_STORE_CONNECT_KEY=/path/to/AuthKey_<key id>.p8 \
+#   APP_STORE_CONNECT_ISSUER=<issuer id> scripts/release-mac.sh
+#
+# A Developer ID certificate is the account holder's to hand out. A key signs
+# with one only if it has been given access to cloud-managed distribution
+# certificates, or if a "Developer ID Application" certificate is in the
+# keychain; otherwise the export stops with a cloud signing permission error.
 set -eu
 
-cd "$(dirname "$0")/.."
 OUT="${1:-dist}"
+. "$(dirname "$0")/lib/api-key.sh"
+cd "$(dirname "$0")/.."
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
@@ -23,7 +34,7 @@ xcodebuild archive \
     -project OpenScreens.xcodeproj -scheme OpenScreens -configuration Release \
     -destination "generic/platform=macOS" \
     -archivePath "$WORK/OpenScreens.xcarchive" \
-    -allowProvisioningUpdates -quiet
+    -allowProvisioningUpdates "$@" -quiet
 
 cat > "$WORK/upload.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -42,13 +53,13 @@ echo "Sending to Apple's notary service..."
 xcodebuild -exportArchive \
     -archivePath "$WORK/OpenScreens.xcarchive" \
     -exportOptionsPlist "$WORK/upload.plist" -exportPath "$WORK/upload" \
-    -allowProvisioningUpdates
+    -allowProvisioningUpdates "$@"
 
 echo "Waiting for the notarised app..."
 tries=0
 until xcodebuild -exportNotarizedApp \
         -archivePath "$WORK/OpenScreens.xcarchive" -exportPath "$WORK/notarized" \
-        -allowProvisioningUpdates >"$WORK/notarized.log" 2>&1; do
+        -allowProvisioningUpdates "$@" >"$WORK/notarized.log" 2>&1; do
     tries=$((tries + 1))
     if [ "$tries" -ge 60 ]; then
         cat "$WORK/notarized.log" >&2

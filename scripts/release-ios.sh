@@ -7,8 +7,16 @@
 # Signing and the upload go through the Apple ID that Xcode is signed in
 # with, for the team in Config/Signing.xcconfig. The app record has to exist
 # in App Store Connect already.
+#
+# An App Store Connect API key can stand in for the Apple ID, which is what a
+# machine nobody is signed in on needs, and what gets a release out when
+# Xcode has forgotten its account:
+#
+#   APP_STORE_CONNECT_KEY=/path/to/AuthKey_<key id>.p8 \
+#   APP_STORE_CONNECT_ISSUER=<issuer id> scripts/release-ios.sh
 set -eu
 
+. "$(dirname "$0")/lib/api-key.sh"
 cd "$(dirname "$0")/.."
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
@@ -21,7 +29,7 @@ xcodebuild archive \
     -project OpenScreens.xcodeproj -scheme "OpenScreens iOS" -configuration Release \
     -destination "generic/platform=iOS" \
     -archivePath "$WORK/OpenScreens.xcarchive" \
-    -allowProvisioningUpdates -quiet
+    -allowProvisioningUpdates "$@" -quiet
 
 cat > "$WORK/upload.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -42,6 +50,6 @@ echo "Uploading to App Store Connect..."
 xcodebuild -exportArchive \
     -archivePath "$WORK/OpenScreens.xcarchive" \
     -exportOptionsPlist "$WORK/upload.plist" -exportPath "$WORK/upload" \
-    -allowProvisioningUpdates
+    -allowProvisioningUpdates "$@"
 
 echo "Uploaded. The build appears in TestFlight once Apple has processed it."
