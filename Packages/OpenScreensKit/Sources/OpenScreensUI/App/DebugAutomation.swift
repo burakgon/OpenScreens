@@ -288,6 +288,7 @@ enum DebugAutomation {
     ///     f=58,o            modifier change through the canvas (macOS): key
     ///                       code and the flags that are down afterwards
     ///     c=640,400         click at this pixel of the picture
+    ///     win=1100x640      resize the session's window (macOS), in points
     ///     clip=text         put text on the remote clipboard
     ///     curtain=on|off    hide or show the remote Mac's own screen
     ///     lock=1            end the session, as closing its window does
@@ -323,6 +324,15 @@ enum DebugAutomation {
             #if os(macOS)
             case "e", "f":
                 sendCanvasEvent(isModifier: verb == "f", argument)
+            case "win":
+                let parts = argument.split(separator: "x").compactMap { Double($0) }
+                guard parts.count == 2,
+                      let window = NSApp.windows.lazy.compactMap({ findCanvas(in: $0.contentView)?.window }).first
+                else { continue }
+                var frame = window.frame
+                frame.origin.y += frame.height - parts[1]
+                frame.size = CGSize(width: parts[0], height: parts[1])
+                window.setFrame(frame, display: true)
             #endif
             case "c":
                 let parts = argument.split(separator: ",").compactMap { Double($0) }
