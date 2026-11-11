@@ -23,7 +23,8 @@ extension SFTPClient {
     ///
     /// The file is fetched with many reads in flight at once and written
     /// straight to `localURL`, replacing what is there. If the transfer fails
-    /// or its task is cancelled, the partial file is removed.
+    /// or its task is cancelled, the partial file is removed. Cancelling
+    /// returns at once, whether or not the server is still answering.
     ///
     /// - Parameter progress: Called as data arrives with the bytes received
     ///   so far and the file's size, when the server reports one.
@@ -39,8 +40,8 @@ extension SFTPClient {
     ///
     /// The remote file is created, or emptied if it exists, and filled with
     /// many writes in flight at once. If the transfer fails or its task is
-    /// cancelled, the partial remote file is removed when the server can
-    /// still be reached.
+    /// cancelled, the server is told to remove the partial file, and the
+    /// call returns without waiting for it to do so.
     ///
     /// - Parameter progress: Called as the server confirms data with the
     ///   bytes confirmed so far and the file's size.
@@ -220,7 +221,7 @@ extension SFTPClient {
         do {
             // The size is only a hint, for progress and for pacing; a server
             // that will not say is not a reason to fail.
-            let size = (try? await attributes(of: handle))?.size.map { Int64(clamping: $0) }
+            let size = try await attributesIfOffered(of: handle)?.size.map { Int64(clamping: $0) }
             let file = try LocalFile(creating: localURL)
             do {
                 received = try await fetch(handle, into: file, expectedSize: size, progress: progress)
@@ -230,11 +231,22 @@ extension SFTPClient {
                 throw error
             }
         } catch {
-            await closeAbandoned(handle)
+            await discard(handle)
             throw error
         }
         try await close(handle)
         return received
+    }
+
+    /// What the server says about an open file, or `nil` when it refuses to
+    /// say. Only a refusal is passed over: a server that does not answer, or
+    /// a task that was cancelled, still ends the transfer here.
+    private nonisolated func attributesIfOffered(of handle: SFTPHandle) async throws -> SFTPAttributes? {
+        do {
+            return try await attributes(of: handle)
+        } catch let error as SFTPError where error.statusCode != nil {
+            return nil
+        }
     }
 
     /// The outcome of one read request of a download.
@@ -346,12 +358,9 @@ extension SFTPClient {
             try await close(handle)
         } catch {
             // A half-written file under the real name would pass for the
-            // whole thing. Take it away again, in a task of its own because
-            // this one may be cancelled.
-            await Task {
-                try? await self.close(handle)
-                try? await self.remove(remotePath)
-            }.value
+            // whole thing. The server is told to take it away again, and is
+            // not waited for: it may be the reason the transfer failed.
+            await discard(handle, removing: remotePath)
             throw error
         }
         return sent

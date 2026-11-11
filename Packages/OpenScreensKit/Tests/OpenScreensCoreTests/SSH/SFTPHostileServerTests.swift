@@ -383,6 +383,202 @@ extension SSHTests {
                 await client.close()
             }
         }
+
+        // MARK: Silence
+
+        @Test func aRequestTheServerNeverAnswersIsGivenUpOn() async throws {
+            try await SFTPTestServer.run(script: { request in
+                if case .opendir = request { return .ignore }
+                return .serve
+            }) { server in
+                let client = try await server.connect(timeout: .seconds(1))
+                let sftp = try await client.openSFTP()
+
+                let clock = ContinuousClock()
+                let started = clock.now
+                await #expect(throws: SSHError.timeout) {
+                    try await Self.finishing(within: .seconds(10)) { try await sftp.list("/") }
+                }
+                // Not before the allowance the connection was made with was
+                // used up, and not long after.
+                let waited = clock.now - started
+                #expect(waited >= .seconds(1) && waited < .seconds(4), "waited \(waited)")
+
+                // One request without an answer is not the end of the session.
+                #expect(try await sftp.realPath(".") == "/")
+                await client.close()
+            }
+        }
+
+        /// A server that answers slowly is not a server that does not answer:
+        /// as long as replies keep coming, the ones still outstanding are
+        /// waited for, however long ago they were asked for.
+        @Test func aServerThatKeepsAnsweringIsWaitedFor() async throws {
+            let reads = Tally()
+            try await SFTPTestServer.run(script: { request in
+                // The sixteen reads that fetch the file are asked for at
+                // once and answered 150 ms apart, so the last of them waits
+                // well over two seconds. The read after them finds the end.
+                if case .read = request {
+                    let number = reads.next()
+                    return .serveLate(.milliseconds(number <= 16 ? 150 * number : 100))
+                }
+                return .serve
+            }) { server in
+                let local = try TemporaryDirectory()
+                let contents = Data.testPattern(count: 16 * SFTPClient.transferChunkSize)
+                server.volume.addFile("data.bin", contents: contents)
+                let client = try await server.connect(timeout: .seconds(1))
+                let sftp = try await client.openSFTP()
+
+                let clock = ContinuousClock()
+                let started = clock.now
+                try await Self.finishing(within: .seconds(30)) {
+                    try await sftp.download(remotePath: "/data.bin", to: local.file("data.bin"))
+                }
+                #expect(try Data(contentsOf: local.file("data.bin")) == contents)
+                // Longer than any one request was allowed to go unanswered.
+                #expect(clock.now - started > .seconds(2))
+                await client.close()
+            }
+        }
+
+        @Test func aTransferFromAServerThatGoesSilentFails() async throws {
+            let reads = Tally()
+            try await SFTPTestServer.run(script: { request in
+                switch request {
+                case .read:
+                    return reads.next() <= 8 ? .serve : .ignore
+                case .close:
+                    return .ignore
+                default:
+                    return .serve
+                }
+            }) { server in
+                let local = try TemporaryDirectory()
+                server.volume.addFile("data.bin", contents: .testPattern(count: 1 << 20))
+                let client = try await server.connect(timeout: .seconds(1))
+                let sftp = try await client.openSFTP()
+
+                let destination = local.file("data.bin")
+                await #expect(throws: SSHError.timeout) {
+                    try await Self.finishing(within: .seconds(10)) {
+                        try await sftp.download(remotePath: "/data.bin", to: destination)
+                    }
+                }
+                #expect(!FileManager.default.fileExists(atPath: destination.path))
+                await client.close()
+            }
+        }
+
+        @Test func cancellingADownloadDoesNotWaitForAServerThatWentSilent() async throws {
+            let reads = Tally()
+            try await SFTPTestServer.run(script: { request in
+                switch request {
+                case .read:
+                    return reads.next() <= 8 ? .serve : .ignore
+                case .close:
+                    // Nor is the request to close the file answered.
+                    return .ignore
+                default:
+                    return .serve
+                }
+            }) { server in
+                let local = try TemporaryDirectory()
+                server.volume.addFile("data.bin", contents: .testPattern(count: 1 << 20))
+                let client = try await server.connect()
+                let sftp = try await client.openSFTP()
+
+                let destination = local.file("data.bin")
+                let transfer = Task { try await sftp.download(remotePath: "/data.bin", to: destination) }
+                #expect(await server.waitForRequests { _ in reads.value > 8 })
+                try await Task.sleep(for: .milliseconds(100))
+
+                let clock = ContinuousClock()
+                let cancelled = clock.now
+                transfer.cancel()
+                await #expect(throws: CancellationError.self) {
+                    try await Self.finishing(within: .seconds(5)) { try await transfer.value }
+                }
+                #expect(clock.now - cancelled < .seconds(1))
+                #expect(!FileManager.default.fileExists(atPath: destination.path))
+                // The server was still told to close the file, should it
+                // ever come round to it.
+                #expect(await server.waitForRequests { $0.contains { if case .close = $0 { true } else { false } } })
+                await client.close()
+            }
+        }
+
+        @Test func cancellingAnUploadDoesNotWaitForAServerThatWentSilent() async throws {
+            let writes = Tally()
+            try await SFTPTestServer.run(script: { request in
+                switch request {
+                case .write:
+                    return writes.next() <= 8 ? .serve : .ignore
+                case .close, .remove:
+                    return .ignore
+                default:
+                    return .serve
+                }
+            }) { server in
+                let local = try TemporaryDirectory()
+                let source = local.file("data.bin")
+                try Data.testPattern(count: 1 << 20).write(to: source)
+                let client = try await server.connect()
+                let sftp = try await client.openSFTP()
+
+                let transfer = Task { try await sftp.upload(localURL: source, to: "/data.bin") }
+                #expect(await server.waitForRequests { _ in writes.value > 8 })
+                try await Task.sleep(for: .milliseconds(100))
+
+                let clock = ContinuousClock()
+                let cancelled = clock.now
+                transfer.cancel()
+                await #expect(throws: CancellationError.self) {
+                    try await Self.finishing(within: .seconds(5)) { try await transfer.value }
+                }
+                #expect(clock.now - cancelled < .seconds(1))
+
+                // The server was told to close the file and then to remove
+                // it, and both were on their way before the upload returned:
+                // what is asked next comes after them.
+                #expect(try await sftp.realPath(".") == "/")
+                let tidying: [String] = server.requests.compactMap { request in
+                    switch request {
+                    case .close: "close"
+                    case .remove(_, let path): "remove \(path)"
+                    case .realpath: "realpath"
+                    default: nil
+                    }
+                }
+                #expect(tidying == ["close", "remove /data.bin", "realpath"])
+                await client.close()
+            }
+        }
+
+        @Test func cancellingAListingDoesNotWaitForAServerThatWentSilent() async throws {
+            try await SFTPTestServer.run(script: { request in
+                switch request {
+                case .readdir, .close: .ignore
+                default: .serve
+                }
+            }) { server in
+                let client = try await server.connect()
+                let sftp = try await client.openSFTP()
+                let listing = Task { try await sftp.list("/") }
+                #expect(await server.waitForRequests { $0.contains { if case .readdir = $0 { true } else { false } } })
+
+                let clock = ContinuousClock()
+                let cancelled = clock.now
+                listing.cancel()
+                await #expect(throws: CancellationError.self) {
+                    try await Self.finishing(within: .seconds(5)) { try await listing.value }
+                }
+                #expect(clock.now - cancelled < .seconds(1))
+                #expect(await server.waitForRequests { $0.contains { if case .close = $0 { true } else { false } } })
+                await client.close()
+            }
+        }
     }
 }
 

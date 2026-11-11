@@ -14,16 +14,40 @@ import NIOCore
 /// reply by ID, so one slow request does not hold up the others; the
 /// transfers in this type rely on that to keep many reads or writes in flight.
 /// Cancelling a task abandons the request it is waiting on.
+///
+/// A request does not wait for ever. When the server has sent nothing at all
+/// for as long as the connection's timeout, every request that has been
+/// waiting that long fails with ``SSHError/timeout``. A server that is slow
+/// but keeps answering is waited for: what counts is how long it has been
+/// silent, not how long one request has been out, because a transfer on a
+/// slow link has requests queued behind each other for longer than that.
 public actor SFTPClient {
     private let stream: SSHChannelStream
     /// Keeps the SSH connection alive for as long as the session is in use.
     private let client: SSHClient
 
+    /// A request that was sent and is not answered yet.
+    private struct PendingRequest {
+        let reply: CheckedContinuation<SFTPPacket, any Error>
+        /// When it was handed to the connection.
+        let sentAt: ContinuousClock.Instant
+    }
+
     private var lastRequestID: UInt32 = 0
-    private var pendingReplies: [UInt32: CheckedContinuation<SFTPPacket, any Error>] = [:]
+    private var pendingReplies: [UInt32: PendingRequest] = [:]
     private var pendingVersion: CheckedContinuation<UInt32, any Error>?
     /// Why the session is over, once it is. Every later request fails with it.
     private var ending: SFTPError?
+
+    /// How long the server may stay silent before the requests waiting on it
+    /// are given up on. Set from the connection's timeout when the session
+    /// starts.
+    private var requestTimeout = Duration.seconds(15)
+    /// When the server last sent a packet.
+    private var lastHeardFromServer = ContinuousClock.now
+    /// The task that gives up on overdue requests; `nil` while none are
+    /// waiting.
+    private var watchdog: Task<Void, Never>?
 
     init(stream: SSHChannelStream, client: SSHClient) {
         self.stream = stream
@@ -40,6 +64,7 @@ public actor SFTPClient {
     /// Starts receiving replies and agrees on the protocol version with the
     /// server. Nothing else may be sent before this returns.
     func start(timeout: Duration) async throws {
+        requestTimeout = timeout
         // The reader owns the receiving half of the stream for the life of
         // the session. It holds the session weakly so that letting go of the
         // session is enough to end it.
@@ -107,16 +132,18 @@ public actor SFTPClient {
     }
 
     private func receive(_ packet: SFTPPacket) {
+        lastHeardFromServer = .now
         if case .version(let version, _) = packet {
             pendingVersion?.resume(returning: version)
             pendingVersion = nil
             return
         }
-        // A reply nobody is waiting for answers a request that was cancelled.
+        // A reply nobody is waiting for answers a request that was given up
+        // on: its task was cancelled, or its time ran out.
         guard let id = packet.replyID, let waiting = pendingReplies.removeValue(forKey: id) else {
             return
         }
-        waiting.resume(returning: packet)
+        waiting.reply.resume(returning: packet)
     }
 
     private func failVersionExchange(with error: any Error) {
@@ -129,9 +156,11 @@ public actor SFTPClient {
         let reason = Self.sessionError(for: error)
         ending = reason
         for waiting in pendingReplies.values {
-            waiting.resume(throwing: reason)
+            waiting.reply.resume(throwing: reason)
         }
         pendingReplies.removeAll()
+        watchdog?.cancel()
+        watchdog = nil
         failVersionExchange(with: reason)
         stream.close()
     }
@@ -152,33 +181,106 @@ public actor SFTPClient {
     /// The request is queued without waiting for it to reach the network.
     /// Nothing can pile up that way: a caller holds one request at a time,
     /// and the transfers cap how many callers there are.
+    ///
+    /// - Throws: ``SSHError/timeout`` when the server stays silent for too
+    ///   long, `CancellationError` when the calling task is cancelled, and
+    ///   the reason the session ended when it does.
     private func exchange(_ request: (UInt32) -> SFTPPacket) async throws -> SFTPPacket {
         if let ending {
             throw ending
         }
         try Task.checkCancellation()
 
-        repeat {
-            lastRequestID &+= 1
-        } while pendingReplies[lastRequestID] != nil
-        let id = lastRequestID
+        let id = nextRequestID()
         let bytes = SFTPPacketCodec.encode(request(id), allocator: stream.channel.allocator)
 
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation {
                 (continuation: CheckedContinuation<SFTPPacket, any Error>) in
-                pendingReplies[id] = continuation
+                pendingReplies[id] = PendingRequest(reply: continuation, sentAt: .now)
                 stream.enqueue(bytes)
+                watchPendingRequests()
             }
         } onCancel: {
-            Task { await self.abandon(id) }
+            Task { await self.abandon(id, because: CancellationError()) }
         }
     }
 
-    /// Stops waiting for the reply to a request whose task was cancelled.
-    /// The server still answers; ``receive(_:)`` drops that reply.
-    private func abandon(_ id: UInt32) {
-        pendingReplies.removeValue(forKey: id)?.resume(throwing: CancellationError())
+    private func nextRequestID() -> UInt32 {
+        repeat {
+            lastRequestID &+= 1
+        } while pendingReplies[lastRequestID] != nil
+        return lastRequestID
+    }
+
+    /// Stops waiting for the reply to a request, because its task was
+    /// cancelled or the server left it unanswered for too long. The server
+    /// may answer yet; ``receive(_:)`` drops that reply.
+    private func abandon(_ id: UInt32, because reason: any Error) {
+        pendingReplies.removeValue(forKey: id)?.reply.resume(throwing: reason)
+    }
+
+    /// Makes sure the requests that are waiting have someone watching the
+    /// clock for them. One task does that for all of them, and ends when
+    /// there are none left.
+    private func watchPendingRequests() {
+        guard watchdog == nil else { return }
+        watchdog = Task { [weak self] in
+            while let nextDeadline = await self?.failOverdueRequests() {
+                try? await Task.sleep(until: nextDeadline, clock: .continuous)
+                if Task.isCancelled { return }
+            }
+        }
+    }
+
+    /// Fails the requests whose time is up.
+    ///
+    /// A request's time runs from when it was sent or from when the server
+    /// was last heard from, whichever is later.
+    ///
+    /// - Returns: When the next request's time will be up as things stand, or
+    ///   `nil` when no request is waiting. The watchdog stops at `nil`.
+    private func failOverdueRequests() -> ContinuousClock.Instant? {
+        let now = ContinuousClock.now
+        var overdue: [UInt32] = []
+        var nextDeadline: ContinuousClock.Instant?
+        for (id, request) in pendingReplies {
+            let deadline = max(request.sentAt, lastHeardFromServer) + requestTimeout
+            if deadline <= now {
+                overdue.append(id)
+            } else {
+                nextDeadline = min(nextDeadline ?? deadline, deadline)
+            }
+        }
+        for id in overdue {
+            abandon(id, because: SSHError.timeout)
+        }
+        if nextDeadline == nil {
+            watchdog = nil
+        }
+        return nextDeadline
+    }
+
+    /// Tells the server to close `handle`, and then to delete the file at
+    /// `path`, without waiting to hear how either went.
+    ///
+    /// This is how a transfer or a listing that is being given up on tidies
+    /// up after itself. By the time it returns, the requests are on their way
+    /// in this order, ahead of anything that is asked afterwards. Nothing
+    /// waits on a server that may never answer, and a task that has been
+    /// cancelled, which can no longer make requests of its own, can still
+    /// call this.
+    func discard(_ handle: SFTPHandle?, removing path: String? = nil) {
+        guard ending == nil else { return }
+        let allocator = stream.channel.allocator
+        if let handle {
+            stream.enqueue(SFTPPacketCodec.encode(
+                .close(id: nextRequestID(), handle: handle), allocator: allocator))
+        }
+        if let path {
+            stream.enqueue(SFTPPacketCodec.encode(
+                .remove(id: nextRequestID(), path: path), allocator: allocator))
+        }
     }
 
     /// Checks the reply to a request that only succeeds or fails.
@@ -283,7 +385,7 @@ public actor SFTPClient {
                 }
             }
         } catch {
-            await closeAbandoned(handle)
+            discard(handle)
             throw error
         }
         try await close(handle)
@@ -341,13 +443,6 @@ public actor SFTPClient {
 
     func close(_ handle: SFTPHandle) async throws {
         try expectSuccess(await exchange { .close(id: $0, handle: handle) })
-    }
-
-    /// Closes a handle that is being given up on. This runs in a task of its
-    /// own because the caller may have been cancelled, and a cancelled task
-    /// cannot make requests.
-    nonisolated func closeAbandoned(_ handle: SFTPHandle) async {
-        await Task { try? await self.close(handle) }.value
     }
 
     func attributes(of handle: SFTPHandle) async throws -> SFTPAttributes {

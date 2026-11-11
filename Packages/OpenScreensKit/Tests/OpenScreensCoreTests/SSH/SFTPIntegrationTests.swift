@@ -252,10 +252,12 @@ extension SSHTests.SSHIntegrationTests {
                 }
             }
             await #expect(throws: CancellationError.self) { try await transfer.value }
-            // What had been written is gone again, and the session is
-            // still good for the next transfer.
-            #expect(!FileManager.default.fileExists(atPath: remotePath))
+            // The server was told to take away what had been written, and
+            // the upload did not wait to hear that it had. Whatever is asked
+            // next is answered after that is done, so the listing shows it
+            // gone; and the session is still good for the next transfer.
             #expect(try await sftp.list(server.directory.path).isEmpty)
+            #expect(!FileManager.default.fileExists(atPath: remotePath))
             await client.close()
         }
     }
