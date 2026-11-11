@@ -31,6 +31,11 @@ extension SFTPClient {
     /// A symbolic link at `localURL` is replaced by the file; it is not
     /// written through to what it points at.
     ///
+    /// The download is complete when the server has said where the file ends
+    /// and every byte up to there has arrived and is in place. If the server
+    /// then fails to close its end of the file, that is not a failure of the
+    /// download.
+    ///
     /// The copy is dated as the remote file is. A new file gets the remote
     /// file's permissions, within what this device's mask for new files
     /// allows; a file that is replaced passes its own permissions on to the
@@ -285,7 +290,11 @@ extension SFTPClient {
             await discard(handle)
             throw error
         }
-        try await close(handle)
+        // Every byte is here and the file is in its place. The server is
+        // told to close its end, and what it makes of that changes nothing
+        // about the file: it is neither waited for nor allowed to turn a
+        // finished download into a failed one.
+        await discard(handle)
         return received
     }
 
@@ -404,6 +413,13 @@ extension SFTPClient {
             // existed on the server.
             if let endOfFile, writtenEnd > endOfFile {
                 throw SFTPError.invalidResponse("the file changed while it was being read")
+            }
+            // What makes the copy complete is this: the server said where
+            // the file ends, and exactly that many bytes arrived. The caller
+            // goes by it, and does not need the server's word again when the
+            // file is closed.
+            guard let endOfFile, UInt64(clamping: received) == endOfFile else {
+                throw SFTPError.invalidResponse("a file that did not arrive in full")
             }
             return received
         }

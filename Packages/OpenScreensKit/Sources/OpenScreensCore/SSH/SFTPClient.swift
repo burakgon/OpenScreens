@@ -458,7 +458,10 @@ public actor SFTPClient {
             discard(handle)
             throw error
         }
-        try await close(handle)
+        // The server said the listing was at its end. Whether it then closes
+        // the directory without complaint has no bearing on the listing, so
+        // it is told to and not waited for.
+        discard(handle)
         return SFTPDirectoryContents(
             entries: try await settlingKinds(of: listed, in: path),
             unusableNameCount: unusableNameCount)

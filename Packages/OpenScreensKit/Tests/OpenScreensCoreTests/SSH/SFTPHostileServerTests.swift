@@ -1222,6 +1222,90 @@ extension SSHTests {
                 await client.close()
             }
         }
+
+        // MARK: Closing
+
+        /// Once every byte of a file is here and in place, what the server
+        /// makes of being asked to close its end changes nothing about it.
+        @Test func aCloseThatFailsAfterEverythingArrivedIsNotAFailure() async throws {
+            try await SFTPTestServer.run(script: { request in
+                if case .close(let id, _) = request {
+                    return .reply([.status(id: id, code: .failure, message: "Failure", language: "")])
+                }
+                return .serve
+            }) { server in
+                let local = try TemporaryDirectory()
+                let contents = Data.testPattern(count: 3 * SFTPClient.transferChunkSize + 5)
+                server.volume.addFile("data.bin", contents: contents)
+                let folder = server.volume.addDirectory("folder")
+                server.volume.addFile("inner.txt", in: folder, contents: Data("inner".utf8))
+
+                let client = try await server.connect()
+                let sftp = try await client.openSFTP()
+                let copy = local.file("data.bin")
+                try await sftp.download(remotePath: "/data.bin", to: copy)
+                #expect(try Data(contentsOf: copy) == contents)
+
+                // A listing that is complete is complete, too.
+                #expect(try await sftp.list("/").map(\.name) == ["data.bin", "folder"])
+                let tree = local.file("tree")
+                try await sftp.downloadDirectory(remotePath: "/", to: tree)
+                #expect(try Data(contentsOf: tree.appending(path: "data.bin")) == contents)
+                #expect(try Data(contentsOf: tree.appending(path: "folder/inner.txt")) == Data("inner".utf8))
+                await client.close()
+            }
+        }
+
+        @Test func aCloseThatIsNeverAnsweredDoesNotHoldUpWhatIsComplete() async throws {
+            try await SFTPTestServer.run(script: { request in
+                if case .close = request { return .ignore }
+                return .serve
+            }) { server in
+                let local = try TemporaryDirectory()
+                let contents = Data.testPattern(count: 100_000)
+                server.volume.addFile("data.bin", contents: contents)
+                let client = try await server.connect(timeout: .seconds(5))
+                let sftp = try await client.openSFTP()
+
+                let clock = ContinuousClock()
+                let started = clock.now
+                let copy = local.file("data.bin")
+                try await sftp.download(remotePath: "/data.bin", to: copy)
+                #expect(try await sftp.list("/").map(\.name) == ["data.bin"])
+                // Neither waited out the time the server is given to answer.
+                #expect(clock.now - started < .seconds(4))
+                #expect(try Data(contentsOf: copy) == contents)
+                // The server was told, all the same: once for the file and
+                // once for the folder.
+                #expect(await server.waitForRequests { requests in
+                    requests.count { if case .close = $0 { true } else { false } } == 2
+                })
+                await client.close()
+            }
+        }
+
+        /// An upload is another matter: until the server has closed the
+        /// file, it has not said that what was written is kept.
+        @Test func aCloseThatFailsAfterAnUploadIsAFailure() async throws {
+            try await SFTPTestServer.run(script: { request in
+                if case .close(let id, _) = request {
+                    return .reply([.status(id: id, code: .failure, message: "Disk full", language: "")])
+                }
+                return .serve
+            }) { server in
+                let local = try TemporaryDirectory()
+                let source = local.file("notes.txt")
+                try Data("new".utf8).write(to: source)
+                server.volume.addFile("notes.txt", contents: Self.old)
+                let client = try await server.connect()
+                let sftp = try await client.openSFTP()
+                await #expect(throws: SFTPError.status(code: .failure, message: "Disk full")) {
+                    try await sftp.upload(localURL: source, to: "/notes.txt")
+                }
+                #expect(server.volume.contents(of: "/notes.txt") == Self.old)
+                await client.close()
+            }
+        }
     }
 }
 
