@@ -32,10 +32,18 @@ enum OpenSSHPrivateKeyFile {
     /// Padding granularity of the "none" cipher.
     private static let unencryptedBlockSize = 8
 
-    /// A sanity limit on the cost a key file may ask for. `ssh-keygen` uses 16
-    /// or 24 rounds and people who raise it stay in the hundreds; a file
-    /// asking for more than this is either damaged or trying to stall the app.
-    private static let maximumKDFRounds: UInt32 = 4096
+    /// A limit on the work a key file may ask for.
+    ///
+    /// A round of the key derivation takes about five milliseconds on a fast
+    /// Mac for the 48 bytes the usual cipher needs, with this code as with
+    /// OpenSSH's own, and once started the derivation runs to the end:
+    /// nothing can call it off. `ssh-keygen` asks for 16 rounds unless told
+    /// otherwise with `-a`, and people who raise it mostly stay in the
+    /// hundreds. Someone who says 1000 waits five seconds every time they
+    /// unlock the key, which is about as far as anyone goes. This limit lets
+    /// them in and stops there: a file that asks for more is damaged, or
+    /// means to stall the app.
+    private static let maximumKDFRounds: UInt32 = 1024
 
     // MARK: Decoding
 

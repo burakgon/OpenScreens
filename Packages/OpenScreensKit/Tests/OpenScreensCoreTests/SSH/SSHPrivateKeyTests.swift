@@ -263,6 +263,66 @@ extension SSHTests {
             }
             #expect(detail.contains("do not match"))
         }
+
+        // MARK: The cost of unlocking
+
+        /// The protected Ed25519 fixture, changed to ask for `rounds` rounds
+        /// of key derivation in place of the 24 it was made with.
+        static func protectedKey(askingFor rounds: UInt32) throws -> String {
+            let lines = SSHKeyFixtures.ed25519Protected.privateKey.split(separator: "\n")
+            let contents = try #require(Data(base64Encoded: lines.dropFirst().dropLast().joined()))
+            // After its 15 bytes of magic the file names its cipher and its
+            // key derivation, and gives the derivation's options: a salt and
+            // the number of rounds.
+            var reader = SSHWireReader(Data(contents.dropFirst(15)))
+            let cipher = try reader.readString()
+            let derivation = try reader.readString()
+            var options = SSHWireReader(try reader.readString())
+            let salt = try options.readString()
+            #expect(try options.readUInt32() == 24)
+
+            var changedOptions = SSHWireWriter()
+            changedOptions.writeString(salt)
+            changedOptions.writeUInt32(rounds)
+            var file = SSHWireWriter()
+            file.writeBytes(Data(contents.prefix(15)))
+            file.writeString(cipher)
+            file.writeString(derivation)
+            file.writeString(changedOptions.data)
+            file.writeBytes(reader.readRemaining())
+            return """
+            -----BEGIN OPENSSH PRIVATE KEY-----
+            \(file.data.base64EncodedString())
+            -----END OPENSSH PRIVATE KEY-----
+            """
+        }
+
+        @Test func theRoundsAKeyFileAsksForAreTheOnesUsed() throws {
+            let fixture = SSHKeyFixtures.ed25519Protected
+            // Put back together unchanged, the file still unlocks…
+            let unchanged = try SSHPrivateKey(
+                openSSH: Self.protectedKey(askingFor: 24), passphrase: fixture.passphrase)
+            #expect(unchanged.fingerprint == fixture.fingerprint)
+            // …and one round more gives a different key, which opens nothing.
+            #expect(throws: SSHKeyError.wrongPassphrase) {
+                try SSHPrivateKey(openSSH: Self.protectedKey(askingFor: 25), passphrase: fixture.passphrase)
+            }
+        }
+
+        @Test(arguments: [1025, 4096, 1_000_000, UInt32.max])
+        func aKeyFileThatAsksForTooMuchWorkIsTurnedAwayWithoutDoingIt(rounds: UInt32) throws {
+            let text = try Self.protectedKey(askingFor: rounds)
+            let clock = ContinuousClock()
+            let started = clock.now
+
+            // A round takes milliseconds and cannot be interrupted. The
+            // least of these would hold the caller for five seconds in a
+            // release build, and for most of half a minute in this one.
+            #expect(throws: SSHKeyError.unsupportedCipher("\(rounds) rounds of key derivation")) {
+                try SSHPrivateKey(openSSH: text, passphrase: SSHKeyFixtures.ed25519Protected.passphrase)
+            }
+            #expect(clock.now - started < .seconds(1))
+        }
     }
 }
 

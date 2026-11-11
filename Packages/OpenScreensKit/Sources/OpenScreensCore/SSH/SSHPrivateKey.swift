@@ -45,8 +45,10 @@ public struct SSHPrivateKey: Sendable {
     /// Passphrase-protected keys are supported when they use the `bcrypt` key
     /// derivation with an AES cipher in CTR, CBC or GCM mode; `ssh-keygen`
     /// uses `aes256-ctr` unless told otherwise. Unlocking such a key
-    /// deliberately takes a noticeable fraction of a second, so call this
-    /// away from the main actor.
+    /// deliberately takes a noticeable fraction of a second, and seconds for
+    /// a key made with a high `ssh-keygen -a`, so call this away from the
+    /// main actor. It cannot be interrupted. A key that asks for more than
+    /// 1024 rounds of key derivation is turned away without trying.
     ///
     /// - Parameters:
     ///   - text: The contents of the key file.
