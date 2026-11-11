@@ -191,7 +191,12 @@ public final class RemoteSession: Identifiable {
             return .reconnecting(attempt: attempt)
         case .disconnecting, .disconnected:
             if let failureMessage { return .failed(failureMessage) }
-            return isStarting ? .connecting : .ended
+            if isStarting { return .connecting }
+            if engine.endedByRemoteUser {
+                // Shown as a failure so the way back in is a deliberate one.
+                return .failed("The session was ended from the other computer.")
+            }
+            return .ended
         case .failed(let message):
             // The engine still shows how the last attempt ended while the
             // next one is getting under way.

@@ -294,6 +294,49 @@ struct SessionEndToEndTests {
         #expect(message.contains("refused"))
     }
 
+    /// Someone at the other computer who ends the session has sent the
+    /// viewer away. Coming straight back, as after a network fault, would
+    /// undo what they just did.
+    @Test func aSessionEndedAtTheOtherComputerStaysEnded() async throws {
+        let (session, server, _) = try await makeSession()
+        defer { server.stop() }
+        #expect(session.settings.reconnectAutomatically)
+        session.start()
+        #expect(await waitUntil { session.phase == .connected })
+        server.clearEvents()
+
+        server.endSessions(announced: true)
+        #expect(await waitUntil {
+            if case .failed = session.phase { return true }
+            return false
+        })
+        guard case .failed(let message) = session.phase else { return }
+        #expect(message.contains("ended from the other computer"))
+
+        // Long enough for a reconnect, had one been coming.
+        try await Task.sleep(for: .seconds(3))
+        #expect(!server.events.contains(.connected))
+        #expect(session.phase == .failed(message))
+
+        // Asking for it is another matter.
+        session.retry()
+        #expect(await waitUntil { session.phase == .connected })
+    }
+
+    /// The counterpart: a connection that just drops is a fault, and the
+    /// session comes back by itself.
+    @Test func aDroppedConnectionIsReopened() async throws {
+        let (session, server, _) = try await makeSession()
+        defer { server.stop() }
+        session.start()
+        #expect(await waitUntil { session.phase == .connected })
+        server.clearEvents()
+
+        server.endSessions(announced: false)
+        #expect(await server.waitForEvents(timeout: .seconds(15)) { $0.contains(.connected) })
+        #expect(await waitUntil { session.phase == .connected })
+    }
+
     @Test func endingASessionDisconnects() async throws {
         let (session, server, model) = try await makeSession()
         defer { server.stop() }

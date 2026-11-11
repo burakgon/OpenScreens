@@ -118,6 +118,19 @@ public final class RFBTestServer: @unchecked Sendable {
         }
     }
 
+    /// Closes every connection from this end.
+    ///
+    /// A Mac whose user ends a viewer's session says so before it hangs up,
+    /// and a viewer is expected to stay away afterwards. With `announced`
+    /// false the connection just goes, the way a network fault looks.
+    public func endSessions(announced: Bool) {
+        queue.async { [self] in
+            for client in clients.values {
+                client.end(announced: announced)
+            }
+        }
+    }
+
     // MARK: - Inspection
 
     /// Everything received so far, in order.
@@ -317,6 +330,19 @@ private final class Client: @unchecked Sendable {
         isClosed = true
         connection.cancel()
         onClose?()
+    }
+
+    /// Hangs up, first telling the viewer that the user here chose to if
+    /// `announced`: Apple's state change message with code 1.
+    func end(announced: Bool) {
+        guard !isClosed else { return }
+        guard announced else {
+            close()
+            return
+        }
+        connection.send(
+            content: Data([0x14, 0, 0, 4, 0, 1, 0, 1]),
+            completion: .contentProcessed { [weak self] _ in self?.close() })
     }
 
     func markDirty() {
