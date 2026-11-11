@@ -16,6 +16,30 @@ extension SSHTests {
             try FileManager.default.contentsOfDirectory(atPath: directory.path).sorted()
         }
 
+        struct DidNotFinish: Error {}
+
+        /// Waits for `operation`, but only so long: what is being tested
+        /// here is often that the client stops waiting, or stops taking
+        /// what a server keeps sending. An operation that is still going
+        /// after `limit` is cancelled and reported as ``DidNotFinish``.
+        static func finishing<Value: Sendable>(
+            within limit: Duration,
+            _ operation: @escaping @Sendable () async throws -> Value
+        ) async throws -> Value {
+            let task = Task(operation: operation)
+            let outcome = Recorder<Result<Value, any Error>>()
+            Task { outcome.record(await task.result) }
+            let deadline = ContinuousClock.now + limit
+            while outcome.values.isEmpty, ContinuousClock.now < deadline {
+                try await Task.sleep(for: .milliseconds(5))
+            }
+            guard let result = outcome.values.first else {
+                task.cancel()
+                throw DidNotFinish()
+            }
+            return try result.get()
+        }
+
         // MARK: The test server itself
 
         @Test func theTestServerServesAnHonestClient() async throws {
@@ -145,6 +169,217 @@ extension SSHTests {
                 }
                 #expect(try Data(contentsOf: single) == Data("third".utf8))
                 #expect(singleProgress.values.last == [5, .max])
+                await client.close()
+            }
+        }
+
+        // MARK: Memory
+
+        static func entry(_ name: String, mode: UInt32 = 0o100644) -> SFTPNameEntry {
+            SFTPNameEntry(filename: name, longname: name, attributes: SFTPAttributes(size: 1, mode: mode))
+        }
+
+        @Test func aListingThatNeverEndsIsGivenUpOn() async throws {
+            let batch = (0..<2000).map { Self.entry("file-\($0)") }
+            try await SFTPTestServer.run(script: { request in
+                // The same two thousand names, as often as they are asked for.
+                if case .readdir(let id, _) = request {
+                    return .reply([.name(id: id, entries: batch)])
+                }
+                return .serve
+            }) { server in
+                let client = try await server.connect()
+                let sftp = try await client.openSFTP()
+                let limit = SFTPClient.maximumListingEntries
+                await #expect(throws: SFTPError.tooManyEntries(limit: limit)) {
+                    try await Self.finishing(within: .seconds(20)) { try await sftp.list("/") }
+                }
+                // It stopped asking soon after it had enough.
+                let asked = server.requests.count { if case .readdir = $0 { true } else { false } }
+                #expect(asked <= limit / batch.count + 1)
+                // The session is none the worse for it.
+                #expect(try await sftp.realPath(".") == "/")
+                #expect(server.volume.openHandleCount == 0)
+                await client.close()
+            }
+        }
+
+        @Test func aListingOfNamesWithoutEndIsGivenUpOn() async throws {
+            // A megabyte of name apiece: few entries, and a great deal to keep.
+            let megabyte = 1 << 20
+            let batch = (0..<4).map {
+                SFTPNameEntry(
+                    filename: String(repeating: "n", count: megabyte - 1) + "\($0)", longname: "",
+                    attributes: SFTPAttributes(mode: 0o100644))
+            }
+            try await SFTPTestServer.run(script: { request in
+                if case .readdir(let id, _) = request {
+                    return .reply([.name(id: id, entries: batch)])
+                }
+                return .serve
+            }) { server in
+                let client = try await server.connect()
+                let sftp = try await client.openSFTP()
+                let megabytes = SFTPClient.maximumListingBytes / megabyte
+                await #expect(throws: SFTPError.invalidResponse("a folder listing of more than \(megabytes) MB")) {
+                    try await Self.finishing(within: .seconds(20)) { try await sftp.list("/") }
+                }
+                let asked = server.requests.count { if case .readdir = $0 { true } else { false } }
+                #expect(asked == megabytes / batch.count + 1)
+                // The session is none the worse for it.
+                #expect(try await sftp.realPath(".") == "/")
+                await client.close()
+            }
+        }
+
+        @Test func aListingReplyWithNothingInItIsTheEnd() async throws {
+            try await SFTPTestServer.run(script: { request in
+                // Not an end-of-file, and not a name either, however often
+                // it is asked.
+                if case .readdir(let id, _) = request {
+                    return .reply([.name(id: id, entries: [])])
+                }
+                return .serve
+            }) { server in
+                let client = try await server.connect()
+                let sftp = try await client.openSFTP()
+                let listed = try await Self.finishing(within: .seconds(10)) { try await sftp.list("/") }
+                #expect(listed.isEmpty)
+                await client.close()
+            }
+        }
+
+        @Test func aTreeWithoutEndIsGivenUpOnBeforeAnythingIsWritten() async throws {
+            // Every folder holds fifty thousand folders, each of which holds
+            // fifty thousand folders.
+            let batch = (0..<50_000).map {
+                SFTPNameEntry(filename: "d\($0)", longname: "", attributes: SFTPAttributes(mode: 0o040755))
+            }
+            let handle = SFTPHandle(bytes: [1])
+            let listings = Tally()
+            try await SFTPTestServer.run(script: { request in
+                switch request {
+                case .opendir(let id, _):
+                    return .reply([.handle(id: id, handle: handle)])
+                case .readdir(let id, _):
+                    // One reply with the folders, then the end, by turns.
+                    return listings.next().isMultiple(of: 2)
+                        ? .reply([.status(id: id, code: .endOfFile, message: "", language: "")])
+                        : .reply([.name(id: id, entries: batch)])
+                case .close(let id, _):
+                    return .reply([.status(id: id, code: .ok, message: "", language: "")])
+                default:
+                    return .serve
+                }
+            }) { server in
+                let local = try TemporaryDirectory()
+                let destination = local.file("copy")
+                let client = try await server.connect()
+                let sftp = try await client.openSFTP()
+                await #expect(throws: SFTPError.tooManyEntries(limit: SFTPClient.maximumTreeEntries)) {
+                    try await Self.finishing(within: .seconds(30)) {
+                        try await sftp.downloadDirectory(remotePath: "/", to: destination)
+                    }
+                }
+                #expect(!FileManager.default.fileExists(atPath: destination.path))
+                let walked = server.requests.count { if case .opendir = $0 { true } else { false } }
+                #expect(walked <= SFTPClient.maximumTreeEntries / batch.count + 1)
+                await client.close()
+            }
+        }
+
+        @Test func aTreeThatGoesDownWithoutEndIsGivenUpOnBeforeAnythingIsWritten() async throws {
+            // Every folder holds one folder.
+            let handle = SFTPHandle(bytes: [1])
+            let listings = Tally()
+            try await SFTPTestServer.run(script: { request in
+                switch request {
+                case .opendir(let id, _):
+                    return .reply([.handle(id: id, handle: handle)])
+                case .readdir(let id, _):
+                    return listings.next().isMultiple(of: 2)
+                        ? .reply([.status(id: id, code: .endOfFile, message: "", language: "")])
+                        : .reply([.name(id: id, entries: [Self.entry("deeper", mode: 0o040755)])])
+                case .close(let id, _):
+                    return .reply([.status(id: id, code: .ok, message: "", language: "")])
+                default:
+                    return .serve
+                }
+            }) { server in
+                let local = try TemporaryDirectory()
+                let destination = local.file("copy")
+                let client = try await server.connect()
+                let sftp = try await client.openSFTP()
+                let error = await #expect(throws: SFTPError.self) {
+                    try await Self.finishing(within: .seconds(20)) {
+                        try await sftp.downloadDirectory(remotePath: "/", to: destination)
+                    }
+                }
+                // It ends where the local file system would have ended it:
+                // at a path too long to exist. But it ends in the walk.
+                guard case .localFile(let path, let reason) = error else {
+                    Issue.record("expected a local error, got \(String(describing: error))")
+                    return
+                }
+                #expect(reason == String(cString: strerror(ENAMETOOLONG)))
+                #expect(path.hasPrefix(destination.path + "/deeper/deeper/"))
+                #expect(path.utf8.count >= Int(PATH_MAX))
+                #expect(!FileManager.default.fileExists(atPath: destination.path))
+                let walked = server.requests.count { if case .opendir = $0 { true } else { false } }
+                #expect(walked <= Int(PATH_MAX) / "/deeper".utf8.count)
+                await client.close()
+            }
+        }
+
+        @Test func aHandleLongerThanTheProtocolAllowsIsNeverSentBack() async throws {
+            let oversized = SFTPHandle(bytes: [UInt8](repeating: 0x48, count: SFTPHandle.maximumLength + 1))
+            try await SFTPTestServer.run(script: { request in
+                switch request {
+                case .open(let id, _, _, _), .opendir(let id, _):
+                    return .reply([.handle(id: id, handle: oversized)])
+                default:
+                    return .serve
+                }
+            }) { server in
+                let local = try TemporaryDirectory()
+                server.volume.addFile("data.bin", contents: .testPattern(count: 100_000))
+                let client = try await server.connect()
+                let sftp = try await client.openSFTP()
+
+                let refusal = SFTPError.invalidResponse("a handle of \(oversized.bytes.count) bytes")
+                await #expect(throws: refusal) {
+                    try await sftp.download(remotePath: "/data.bin", to: local.file("data.bin"))
+                }
+                #expect(!FileManager.default.fileExists(atPath: local.file("data.bin").path))
+                // A server that breaks the protocol is not talked to further.
+                await #expect(throws: refusal) { try await sftp.list("/") }
+                #expect(server.requests.count == 2)
+                await client.close()
+            }
+        }
+
+        @Test func aReadThatReturnsMoreThanWasAskedForIsRefused() async throws {
+            let reads = Tally()
+            try await SFTPTestServer.run(script: { request in
+                // The first read is answered with one byte too many.
+                if case .read(let id, _, _, let length) = request, reads.next() == 1 {
+                    return .reply([.data(id: id, data: ByteBuffer(repeating: 0x41, count: Int(length) + 1))])
+                }
+                return .serve
+            }) { server in
+                let local = try TemporaryDirectory()
+                server.volume.addFile("data.bin", contents: .testPattern(count: 100_000))
+                let client = try await server.connect()
+                let sftp = try await client.openSFTP()
+
+                let error = await #expect(throws: SFTPError.self) {
+                    try await sftp.download(remotePath: "/data.bin", to: local.file("data.bin"))
+                }
+                guard case .invalidResponse = error else {
+                    Issue.record("expected an invalid response, got \(String(describing: error))")
+                    return
+                }
+                #expect(!FileManager.default.fileExists(atPath: local.file("data.bin").path))
                 await client.close()
             }
         }

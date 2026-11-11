@@ -226,6 +226,17 @@ public actor SFTPClient {
             .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }
 
+    /// The most entries taken from one directory, `.` and `..` included. A
+    /// listing is held in memory whole, and the server decides how long it
+    /// is; one that never says it has reached the end would otherwise be
+    /// collected for as long as it kept sending.
+    static let maximumListingEntries = SFTPPacketCodec.maximumNameCount
+
+    /// The most bytes of names taken from one directory, long names
+    /// included. No directory with names a file system allows comes near
+    /// this within ``maximumListingEntries``.
+    static let maximumListingBytes = 64 * 1024 * 1024
+
     /// The raw entries of a directory, for callers that need more than
     /// ``SFTPItem`` shows.
     func entries(of path: String) async throws -> [SFTPNameEntry] {
@@ -235,6 +246,11 @@ public actor SFTPClient {
         }
 
         var entries: [SFTPNameEntry] = []
+        // What the server lists counts towards the limits whether or not it
+        // is kept, so that a listing of nothing but names to leave out comes
+        // to an end too.
+        var listedCount = 0
+        var listedBytes = 0
         do {
             // The server hands the listing over in batches and says
             // end-of-file when there is nothing more.
@@ -242,6 +258,21 @@ public actor SFTPClient {
                 let reply = try await exchange { .readdir(id: $0, handle: handle) }
                 switch reply {
                 case .name(_, let batch):
+                    // A batch of no names is not something the protocol has.
+                    // It is taken for the end, as OpenSSH's client takes it;
+                    // a server that sends one may never say end-of-file.
+                    guard !batch.isEmpty else { break reading }
+                    listedCount += batch.count
+                    for entry in batch {
+                        listedBytes += entry.filename.utf8.count + entry.longname.utf8.count
+                    }
+                    guard listedCount <= Self.maximumListingEntries else {
+                        throw SFTPError.tooManyEntries(limit: Self.maximumListingEntries)
+                    }
+                    guard listedBytes <= Self.maximumListingBytes else {
+                        throw SFTPError.invalidResponse(
+                            "a folder listing of more than \(Self.maximumListingBytes / (1024 * 1024)) MB")
+                    }
                     // `.` and `..` are not contents, and anything else that
                     // is not one plain name cannot be used as one.
                     entries.append(contentsOf: batch.filter { SFTPPath.isUsableName($0.filename) })
@@ -335,6 +366,13 @@ public actor SFTPClient {
         }
         switch reply {
         case .data(_, let data):
+            // More than was asked for is not an answer to this request. It
+            // would be written over the place of the chunk after it, and
+            // would let the server decide how much is held here at once.
+            guard data.readableBytes <= length else {
+                throw SFTPError.invalidResponse(
+                    "\(data.readableBytes) bytes in answer to a read of \(length)")
+            }
             return data
         case .status(_, .endOfFile, _, _):
             return nil

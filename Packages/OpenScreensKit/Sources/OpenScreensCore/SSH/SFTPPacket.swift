@@ -3,6 +3,12 @@ import NIOCore
 
 /// An opaque reference to an open file or directory, issued by the server.
 struct SFTPHandle: Hashable, Sendable {
+    /// The longest handle the protocol lets a server issue
+    /// (draft-ietf-secsh-filexfer-02 §4). Every request about an open file
+    /// repeats its handle, and a transfer keeps dozens of those in flight, so
+    /// a longer one is refused when it arrives, not taken along.
+    static let maximumLength = 256
+
     var bytes: [UInt8]
 }
 
@@ -91,6 +97,18 @@ enum SFTPPacketCodec {
     /// than 256 KiB; the margin is for servers that pack large directory
     /// listings into one reply. Anything longer is a corrupt length field.
     static let maximumPacketLength = 16 * 1024 * 1024
+
+    /// The most entries one reply to a listing may carry: as many as a whole
+    /// listing may come to. OpenSSH sends a hundred at a time. Without a
+    /// limit, a single packet of the largest size could announce over a
+    /// million entries of a few bytes each, and decoding them would take a
+    /// hundred times the memory the packet did.
+    static let maximumNameCount = 100_000
+
+    /// The most extensions a server may announce when the session starts.
+    /// OpenSSH has about a dozen. Like the entries of a listing, they take
+    /// more room decoded than they do in the packet.
+    static let maximumExtensionCount = 256
 
     fileprivate enum PacketType: UInt8 {
         case initialize = 1
@@ -256,7 +274,7 @@ enum SFTPPacketCodec {
         guard let type = PacketType(rawValue: rawType) else {
             throw .invalidResponse("a packet of unknown type \(rawType)")
         }
-        guard let packet = read(type, from: &body) else {
+        guard let packet = try read(type, from: &body) else {
             throw .invalidResponse("a malformed packet of type \(rawType)")
         }
         return packet
@@ -264,7 +282,12 @@ enum SFTPPacketCodec {
 
     /// Reads the fields of a packet of `type`. `nil` means the body ended
     /// before all of them were there.
-    private static func read(_ type: PacketType, from body: inout ByteBuffer) -> SFTPPacket? {
+    ///
+    /// - Throws: When the fields are all there and one of them is something
+    ///   the protocol does not allow.
+    private static func read(
+        _ type: PacketType, from body: inout ByteBuffer
+    ) throws(SFTPError) -> SFTPPacket? {
         switch type {
         case .initialize:
             guard let version = body.readInteger(as: UInt32.self) else { return nil }
@@ -273,6 +296,9 @@ enum SFTPPacketCodec {
             guard let version = body.readInteger(as: UInt32.self) else { return nil }
             var extensions: [SFTPExtension] = []
             while body.readableBytes > 0 {
+                guard extensions.count < maximumExtensionCount else {
+                    throw .invalidResponse("more than \(maximumExtensionCount) extensions")
+                }
                 guard let name = body.readLengthPrefixedText(),
                       let data = body.readLengthPrefixedText() else { return nil }
                 extensions.append(SFTPExtension(name: name, data: data))
@@ -294,25 +320,25 @@ enum SFTPPacketCodec {
             return .open(
                 id: id, path: path, flags: SFTPOpenFlags(rawValue: flags), attributes: attributes)
         case .close:
-            return body.readHandle().map { .close(id: id, handle: $0) }
+            return try body.readHandle().map { .close(id: id, handle: $0) }
         case .read:
-            guard let handle = body.readHandle(),
+            guard let handle = try body.readHandle(),
                   let offset = body.readInteger(as: UInt64.self),
                   let length = body.readInteger(as: UInt32.self) else { return nil }
             return .read(id: id, handle: handle, offset: offset, length: length)
         case .write:
-            guard let handle = body.readHandle(),
+            guard let handle = try body.readHandle(),
                   let offset = body.readInteger(as: UInt64.self),
                   let data = body.readLengthPrefixed() else { return nil }
             return .write(id: id, handle: handle, offset: offset, data: data)
         case .lstat:
             return body.readLengthPrefixedText().map { .lstat(id: id, path: $0) }
         case .fstat:
-            return body.readHandle().map { .fstat(id: id, handle: $0) }
+            return try body.readHandle().map { .fstat(id: id, handle: $0) }
         case .opendir:
             return body.readLengthPrefixedText().map { .opendir(id: id, path: $0) }
         case .readdir:
-            return body.readHandle().map { .readdir(id: id, handle: $0) }
+            return try body.readHandle().map { .readdir(id: id, handle: $0) }
         case .remove:
             return body.readLengthPrefixedText().map { .remove(id: id, path: $0) }
         case .mkdir:
@@ -338,11 +364,14 @@ enum SFTPPacketCodec {
             return .status(
                 id: id, code: SFTPStatusCode(rawValue: code), message: message, language: language)
         case .handle:
-            return body.readHandle().map { .handle(id: id, handle: $0) }
+            return try body.readHandle().map { .handle(id: id, handle: $0) }
         case .data:
             return body.readLengthPrefixed().map { .data(id: id, data: $0) }
         case .name:
             guard let count = body.readInteger(as: UInt32.self) else { return nil }
+            guard count <= UInt32(maximumNameCount) else {
+                throw .invalidResponse("a listing of \(count) entries in one reply")
+            }
             var entries: [SFTPNameEntry] = []
             // The count comes from the server; let the body's real size, not
             // the claim, decide how much is allocated.
@@ -406,8 +435,14 @@ extension ByteBuffer {
         readLengthPrefixed().map { String(decoding: $0.readableBytesView, as: UTF8.self) }
     }
 
-    fileprivate mutating func readHandle() -> SFTPHandle? {
-        readLengthPrefixed().map { SFTPHandle(bytes: [UInt8]($0.readableBytesView)) }
+    /// Reads a handle. One that is longer than the protocol allows is
+    /// well-formed, so it is not `nil`, but it is not a handle to work with.
+    fileprivate mutating func readHandle() throws(SFTPError) -> SFTPHandle? {
+        guard let bytes = readLengthPrefixed() else { return nil }
+        guard bytes.readableBytes <= SFTPHandle.maximumLength else {
+            throw .invalidResponse("a handle of \(bytes.readableBytes) bytes")
+        }
+        return SFTPHandle(bytes: [UInt8](bytes.readableBytesView))
     }
 
     /// An attribute block: a flags word, then only the fields it announces.

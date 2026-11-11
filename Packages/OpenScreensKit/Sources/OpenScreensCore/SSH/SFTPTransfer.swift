@@ -14,6 +14,11 @@ extension SFTPClient {
     /// request costs, while keeping what is buffered here small.
     static let transferPipelineDepth = 32
 
+    /// The most files and folders one folder download takes on. The whole
+    /// tree is walked before the first file is fetched, and what the walk
+    /// finds is held in memory until the last one is.
+    static let maximumTreeEntries = 250_000
+
     /// Copies a remote file to this device.
     ///
     /// The file is fetched with many reads in flight at once and written
@@ -54,6 +59,10 @@ extension SFTPClient {
     /// are skipped: a link may lead outside the directory or back into it,
     /// and neither is content that can be copied.
     ///
+    /// The whole directory is looked through before anything is written, and
+    /// one that holds more than ``maximumTreeEntries`` files and folders is
+    /// not taken on.
+    ///
     /// - Parameter progress: Called with the bytes received so far across all
     ///   files and the total found when the directory was first walked.
     public nonisolated func downloadDirectory(
@@ -61,39 +70,81 @@ extension SFTPClient {
         to localURL: URL,
         progress: SFTPProgressHandler? = nil
     ) async throws {
-        // Walk the tree first. That gives the total for progress and creates
-        // the local folders before any file needs them.
-        var files: [(remotePath: String, localURL: URL)] = []
+        /// The server's path for what is at `path` inside the directory.
+        func remote(_ path: String) -> String {
+            path.isEmpty ? remotePath : SFTPPath.join(remotePath, path)
+        }
+        /// Where on this device that goes. Every name on the way is checked
+        /// again here, at the point of writing.
+        func local(_ path: String) throws -> URL {
+            guard let url = SFTPPath.localURL(forPath: path, in: localURL) else {
+                throw SFTPError.invalidResponse("a name that leads outside the folder being copied")
+            }
+            return url
+        }
+
+        // Walk the tree first. That gives the total for progress, and shows
+        // whether this is a tree to take on at all before anything is
+        // written. Folders and files are kept by their path inside the
+        // directory, the empty path being the directory itself: a path is
+        // all it takes to find them at either end, and what is kept per
+        // entry decides how large a tree can be walked.
+        var folders = [""]
+        var files: [String] = []
         var total: Int64 = 0
-        var unvisited = [(remotePath: remotePath, localURL: localURL)]
-        while let directory = unvisited.popLast() {
+        var keptBytes = 0
+        var unvisited = [""]
+        let localRoot = localURL.path(percentEncoded: false)
+        while let folder = unvisited.popLast() {
             try Task.checkCancellation()
-            try LocalFile.createDirectory(at: directory.localURL)
-            for entry in try await entries(of: directory.remotePath) {
+            let localFolder = SFTPPath.LocalFolder(try local(folder))
+            for entry in try await entries(of: remote(folder)) {
+                // Links and special files are not copied.
+                let isFolder = entry.attributes.isDirectory
+                guard isFolder || entry.attributes.isRegularFile else { continue }
                 // The listing has already left out names that are not plain
                 // names. This looks at where the name leads instead, so that
                 // nothing is written outside the folder even if that check
                 // and the file system should ever disagree about a name.
-                guard let childURL = SFTPPath.localURL(for: entry.filename, in: directory.localURL) else {
-                    continue
+                guard localFolder.url(for: entry.filename) != nil else { continue }
+
+                let path = folder.isEmpty ? entry.filename : folder + "/" + entry.filename
+                // A path the local file system has no room for cannot be
+                // copied, and is turned down the way the system would turn
+                // it down. Here rather than later, so that nothing has been
+                // written by then; and it is what ends the walk of a tree
+                // that goes down without end.
+                guard localRoot.utf8.count + 1 + path.utf8.count < Int(PATH_MAX) else {
+                    throw SFTPError.localFile(
+                        path: localRoot + "/" + path, reason: String(cString: strerror(ENAMETOOLONG)))
                 }
-                let childPath = SFTPPath.join(directory.remotePath, entry.filename)
-                if entry.attributes.isDirectory {
-                    unvisited.append((childPath, childURL))
-                } else if entry.attributes.isRegularFile {
-                    files.append((childPath, childURL))
+                keptBytes += path.utf8.count
+                guard folders.count + files.count <= Self.maximumTreeEntries,
+                      keptBytes <= Self.maximumListingBytes else {
+                    throw SFTPError.tooManyEntries(limit: Self.maximumTreeEntries)
+                }
+                if isFolder {
+                    folders.append(path)
+                    unvisited.append(path)
+                } else {
+                    files.append(path)
                     total = total.addingClamped(Int64(clamping: entry.attributes.size ?? 0))
                 }
             }
         }
 
+        // Parents were found before their children, so creating the folders
+        // in this order always finds the parent in place.
+        for folder in folders {
+            try LocalFile.createDirectory(at: local(folder))
+        }
         let expectedTotal = total
         var completed: Int64 = 0
         progress?(0, expectedTotal)
         for file in files {
             let previouslyCompleted = completed
             let received = try await downloadFile(
-                remotePath: file.remotePath, to: file.localURL
+                remotePath: remote(file), to: local(file)
             ) { received, _ in
                 let overall = previouslyCompleted.addingClamped(received)
                 progress?(overall, max(expectedTotal, overall))

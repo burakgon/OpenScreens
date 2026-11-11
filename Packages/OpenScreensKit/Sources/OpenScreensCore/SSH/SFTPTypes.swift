@@ -48,6 +48,10 @@ public enum SFTPError: Error, Equatable, Sendable {
     /// A file on this device could not be read or written.
     case localFile(path: String, reason: String)
 
+    /// A folder, or a folder with everything in it, holds more entries than
+    /// are taken from a server at once. `limit` is how many are.
+    case tooManyEntries(limit: Int)
+
     /// The code of a request the server refused; `nil` for other failures.
     public var statusCode: SFTPStatusCode? {
         if case .status(let code, _) = self { code } else { nil }
@@ -77,6 +81,8 @@ extension SFTPError: LocalizedError {
             "The file transfer connection failed: \(reason)"
         case .localFile(let path, let reason):
             "“\(path)”: \(reason)"
+        case .tooManyEntries(let limit):
+            "The folder holds more than \(limit.formatted()) items, which is more than can be handled at once."
         }
     }
 }
@@ -206,37 +212,75 @@ public enum SFTPPath {
     ///
     /// - Returns: `nil` when either does not hold.
     public static func localURL(for name: String, in directory: URL) -> URL? {
-        guard isUsableName(name) else { return nil }
-        let url = directory.appending(path: name)
-        return leads(url, to: name, in: directory) ? url : nil
+        LocalFolder(directory).url(for: name)
     }
 
-    /// Whether `url` is the entry called `name` directly inside `directory`.
-    static func leads(_ url: URL, to name: String, in directory: URL) -> Bool {
-        resolvedComponents(of: url) == resolvedComponents(of: directory) + [name]
-    }
-
-    /// The components of a local path with `.` and `..` worked out.
-    ///
-    /// This is done on the text alone. Foundation's own standardizing asks
-    /// the file system on the way, and gives a folder that exists and a file
-    /// in it that does not exist yet two different spellings.
-    private static func resolvedComponents(of url: URL) -> [String] {
-        var resolved: [String] = []
-        for component in url.pathComponents {
-            switch component {
-            case ".":
-                continue
-            case "..":
-                // The first component is the root, which has nothing above it.
-                if resolved.count > 1 {
-                    resolved.removeLast()
-                }
-            default:
-                resolved.append(component)
-            }
+    /// Where the entry at `path` inside a tree goes when the tree is copied
+    /// to the local folder `root`. The path is names joined by slashes, and
+    /// each of them is put through ``localURL(for:in:)`` on the way down. The
+    /// empty path is the tree itself.
+    static func localURL(forPath path: String, in root: URL) -> URL? {
+        var url = root
+        guard !path.isEmpty else { return url }
+        for name in path.split(separator: "/", omittingEmptySubsequences: false) {
+            guard let next = localURL(for: String(name), in: url) else { return nil }
+            url = next
         }
-        return resolved
+        return url
+    }
+
+    /// A local folder that entries named by a server are about to go into.
+    ///
+    /// Working out where the folder itself is makes up half the work of
+    /// checking a name against it, and is the same for every name in a
+    /// listing. It is done once, here.
+    struct LocalFolder {
+        let url: URL
+        private let components: [String]
+
+        init(_ url: URL) {
+            self.url = url
+            components = Self.resolvedComponents(of: url)
+        }
+
+        /// Where the entry called `name` goes; see ``SFTPPath/localURL(for:in:)``.
+        func url(for name: String) -> URL? {
+            guard SFTPPath.isUsableName(name) else { return nil }
+            let entry = url.appending(path: name)
+            return holds(entry, as: name) ? entry : nil
+        }
+
+        /// Whether `entry` is the entry called `name` directly inside this
+        /// folder.
+        func holds(_ entry: URL, as name: String) -> Bool {
+            let resolved = Self.resolvedComponents(of: entry)
+            return resolved.count == components.count + 1
+                && resolved.last == name
+                && resolved.starts(with: components)
+        }
+
+        /// The components of a local path with `.` and `..` worked out.
+        ///
+        /// This is done on the text alone. Foundation's own standardizing
+        /// asks the file system on the way, and gives a folder that exists
+        /// and a file in it that does not exist yet two different spellings.
+        private static func resolvedComponents(of url: URL) -> [String] {
+            var resolved: [String] = []
+            for component in url.pathComponents {
+                switch component {
+                case ".":
+                    continue
+                case "..":
+                    // The first component is the root, with nothing above it.
+                    if resolved.count > 1 {
+                        resolved.removeLast()
+                    }
+                default:
+                    resolved.append(component)
+                }
+            }
+            return resolved
+        }
     }
 }
 

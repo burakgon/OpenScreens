@@ -84,18 +84,29 @@ extension SSHTests {
             let (scratch, folder) = try existingFolder()
             defer { _ = scratch }
 
+            let chosen = SFTPPath.LocalFolder(folder)
             for name in ["../up", "../\u{0301}escaped.txt", "a/b", "a/\u{0301}b", "..", ".", "x/..", "/absolute", "//"] {
-                let url = folder.appending(path: name)
-                #expect(!SFTPPath.leads(url, to: name, in: folder), "\(name.debugDescription)")
+                #expect(!chosen.holds(folder.appending(path: name), as: name), "\(name.debugDescription)")
             }
             // Somewhere else altogether, and the folder itself.
-            #expect(!SFTPPath.leads(URL(filePath: "/etc/passwd"), to: "passwd", in: folder))
-            #expect(!SFTPPath.leads(folder, to: folder.lastPathComponent, in: folder))
+            #expect(!chosen.holds(URL(filePath: "/etc/passwd"), as: "passwd"))
+            #expect(!chosen.holds(folder, as: folder.lastPathComponent))
             // Inside, but not under the name that was asked for.
-            #expect(!SFTPPath.leads(folder.appending(path: "other"), to: "notes.txt", in: folder))
-            #expect(SFTPPath.leads(folder.appending(path: "notes.txt"), to: "notes.txt", in: folder))
+            #expect(!chosen.holds(folder.appending(path: "other"), as: "notes.txt"))
+            #expect(chosen.holds(folder.appending(path: "notes.txt"), as: "notes.txt"))
             // A way round that ends up in the right place is still that place.
-            #expect(SFTPPath.leads(folder.appending(path: "x/../notes.txt"), to: "notes.txt", in: folder))
+            #expect(chosen.holds(folder.appending(path: "x/../notes.txt"), as: "notes.txt"))
+        }
+
+        @Test func aPathInsideATreeIsCheckedNameByName() throws {
+            let (scratch, folder) = try existingFolder()
+            defer { _ = scratch }
+            #expect(SFTPPath.localURL(forPath: "", in: folder) == folder)
+            #expect(SFTPPath.localURL(forPath: "a", in: folder)?.path == folder.path + "/a")
+            #expect(SFTPPath.localURL(forPath: "a/b c/d.txt", in: folder)?.path == folder.path + "/a/b c/d.txt")
+            for path in ["..", "a/..", "a/../..", "a//b", "/a", "a/", "a/./b", "../\u{0301}x", "a/nul\0/b"] {
+                #expect(SFTPPath.localURL(forPath: path, in: folder) == nil, "\(path.debugDescription)")
+            }
         }
 
         @Test func aNameTheSystemWouldAlterIsNotUsedUnderAnotherName() throws {

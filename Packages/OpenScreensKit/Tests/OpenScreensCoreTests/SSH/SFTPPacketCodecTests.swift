@@ -253,6 +253,70 @@ extension SSHTests {
             }
         }
 
+        @Test func aHandleLongerThanTheProtocolAllowsIsRefused() throws {
+            let longest = SFTPHandle(bytes: [UInt8](repeating: 7, count: SFTPHandle.maximumLength))
+            var encoded = SFTPPacketCodec.encode(.handle(id: 1, handle: longest))
+            #expect(try SFTPPacketCodec.decodeNext(from: &encoded) == .handle(id: 1, handle: longest))
+
+            // One byte more, in whichever packet it comes.
+            let tooLong = SFTPHandle(bytes: longest.bytes + [7])
+            let carriers: [SFTPPacket] = [
+                .handle(id: 1, handle: tooLong),
+                .close(id: 1, handle: tooLong),
+                .read(id: 1, handle: tooLong, offset: 0, length: 1),
+                .write(id: 1, handle: tooLong, offset: 0, data: Self.buffer([1])),
+                .fstat(id: 1, handle: tooLong),
+                .readdir(id: 1, handle: tooLong),
+            ]
+            for packet in carriers {
+                var encoded = SFTPPacketCodec.encode(packet)
+                #expect(throws: SFTPError.invalidResponse("a handle of \(tooLong.bytes.count) bytes")) {
+                    try SFTPPacketCodec.decodeNext(from: &encoded)
+                }
+            }
+        }
+
+        @Test func aListingReplyCannotCarryMoreEntriesThanAListingMayHold() throws {
+            /// A reply of `count` entries of the smallest kind: no name, no
+            /// long name, no attributes. Twelve bytes each.
+            func reply(count: Int) -> ByteBuffer {
+                var body = Self.buffer([104, 0, 0, 0, 1])
+                body.writeInteger(UInt32(count))
+                body.writeRepeatingByte(0, count: count * 12)
+                return body
+            }
+            let limit = SFTPPacketCodec.maximumNameCount
+            guard case .name(1, let entries) = try SFTPPacketCodec.decode(body: reply(count: limit)) else {
+                Issue.record("expected a listing reply")
+                return
+            }
+            #expect(entries.count == limit)
+            // The entries are all there. It is their number that is refused,
+            // before any of them is taken apart.
+            #expect(throws: SFTPError.invalidResponse("a listing of \(limit + 1) entries in one reply")) {
+                try SFTPPacketCodec.decode(body: reply(count: limit + 1))
+            }
+        }
+
+        @Test func aVersionReplyCannotAnnounceExtensionsWithoutEnd() throws {
+            /// A version reply with `count` extensions of the smallest kind:
+            /// no name and no data. Eight bytes each.
+            func reply(count: Int) -> ByteBuffer {
+                var body = Self.buffer([2, 0, 0, 0, 3])
+                body.writeRepeatingByte(0, count: count * 8)
+                return body
+            }
+            let limit = SFTPPacketCodec.maximumExtensionCount
+            guard case .version(3, let extensions) = try SFTPPacketCodec.decode(body: reply(count: limit)) else {
+                Issue.record("expected a version reply")
+                return
+            }
+            #expect(extensions.count == limit)
+            #expect(throws: SFTPError.invalidResponse("more than \(limit) extensions")) {
+                try SFTPPacketCodec.decode(body: reply(count: limit + 1))
+            }
+        }
+
         // MARK: Attributes
 
         @Test func attributesTellFileKindsApart() {
@@ -296,6 +360,9 @@ extension SSHTests {
                 == "The server could not complete the operation: Directory not empty")
             #expect(SFTPError.status(code: SFTPStatusCode(rawValue: 99), message: "").errorDescription
                 == "The server could not complete the operation (code 99).")
+            #expect(SFTPError.tooManyEntries(limit: 100_000).errorDescription
+                == "The folder holds more than \(100_000.formatted()) items, "
+                    + "which is more than can be handled at once.")
         }
     }
 }
