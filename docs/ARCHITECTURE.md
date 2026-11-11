@@ -26,9 +26,10 @@ extensions: authentication, the adaptive codecs of Standard mode, the HEVC
 stream of High Performance mode, sound, the clipboard. It is
 [rootshellVNC](https://github.com/kitknox/rootshell-vnc), vendored because
 OpenScreens draws the picture in its own views and needs a few things the
-package keeps to itself. The first commit under that directory is the
-upstream release untouched; every change since is its own commit, prefixed
-`engine:`, so `git log -- Vendor/rootshell-vnc` is the list of differences.
+package keeps to itself. The first commit under that directory is an
+upstream release untouched, and a later release is taken in as one commit
+named for it. Every local change is its own commit, prefixed `engine:`, so
+`git log -- Vendor/rootshell-vnc` is the list of differences.
 
 **OpenScreensCore** has no interface and no engine session in it, which is
 what makes it testable:
@@ -60,6 +61,10 @@ what makes it testable:
 - `FileBrowser` is one SSH connection to a computer for its files: it signs
   in the way a tunnel would, lists folders over SFTP and runs transfers one
   at a time. It is independent of any screen-sharing session.
+- `FileTransferOverlay` is the other way files move, with a Mac: a drag onto
+  the canvas is passed on as a drag on the Mac's own screen, and the engine
+  copies what is dropped. The overlay shows where to drag files for copying
+  them back, and each copy as it goes.
 
 ## A session, end to end
 

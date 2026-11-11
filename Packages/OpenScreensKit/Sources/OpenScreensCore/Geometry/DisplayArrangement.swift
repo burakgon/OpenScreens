@@ -70,6 +70,24 @@ public struct DisplayArrangement: Equatable, Sendable {
             y: region.minY + min(max(0, point.y - frame.minY), frame.height))
     }
 
+    /// The part of the remote desktop shown in a rectangle of the picture.
+    ///
+    /// A rectangle that lies over two displays is cut down to the one its
+    /// middle is in: beside each other in the picture is not always beside
+    /// each other on the remote desktop, so nothing wider would be one
+    /// rectangle there. Nil when none of it is over a display.
+    public func remoteRect(for rect: CGRect) -> CGRect? {
+        guard let index = index(at: CGPoint(x: rect.midX, y: rect.midY)) else { return nil }
+        let frame = frames[index]
+        let shown = rect.intersection(frame)
+        guard !shown.isNull, shown.width > 0, shown.height > 0 else { return nil }
+        let region = remote[index]
+        return CGRect(
+            x: region.minX + shown.minX - frame.minX,
+            y: region.minY + shown.minY - frame.minY,
+            width: shown.width, height: shown.height)
+    }
+
     /// Which display a point of the picture belongs to. Where two meet, the
     /// edge belongs to the one that starts there.
     public func index(at point: CGPoint) -> Int? {

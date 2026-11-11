@@ -1062,6 +1062,96 @@ public final class RemoteSession: Identifiable {
                 : Self.describe(engine.negotiatedContentEncryption))
     }
 
+    // MARK: - Files dragged to and from a Mac
+
+    /// Uploads and downloads made by dragging, with their progress.
+    public var fileTransfers: VNCFileTransferController { engine.fileTransfers }
+
+    /// Whether files dropped on the picture can be sent: the Mac has to take
+    /// them, and a session that only watches sends nothing at all.
+    public var canDropFiles: Bool {
+        canSendInput && engine.fileTransfers.canUpload
+    }
+
+    /// Whether files dragged on the Mac's screen can be brought back.
+    public var canFetchFiles: Bool {
+        canSendInput && engine.fileTransfers.canDownload
+    }
+
+    /// A drag of files has come over the picture. The Mac starts a drag of
+    /// its own under the pointer, so what it would drop on lights up there.
+    /// - Returns: Whether the Mac will take the drag.
+    public func beginFileDrag(names: [String], at point: CGPoint) -> Bool {
+        guard canDropFiles else { return false }
+        // A button of ours still down would become part of the Mac's drag.
+        pointerButtonsDown = []
+        let wire = wirePoint(point)
+        return engine.fileTransfers.beginUploadDrag(names: names, x: wire.x, y: wire.y)
+    }
+
+    public func moveFileDrag(to point: CGPoint) {
+        let wire = wirePoint(point)
+        engine.fileTransfers.moveUploadDrag(x: wire.x, y: wire.y)
+    }
+
+    /// The drag left the picture, or ended somewhere else.
+    public func cancelFileDrag() {
+        engine.fileTransfers.cancelUploadDrag()
+    }
+
+    /// The drag was dropped: the files go into whatever the Mac has under
+    /// the pointer there, a folder or its desktop.
+    public func dropFiles(_ urls: [URL], at point: CGPoint) {
+        let wire = wirePoint(point)
+        engine.fileTransfers.dropUpload(fileURLs: urls, x: wire.x, y: wire.y)
+    }
+
+    /// The same for a drop that carries its files as item providers, which
+    /// is how iPhone and iPad hand them over.
+    public func dropFiles(_ providers: [NSItemProvider], at point: CGPoint) {
+        let wire = wirePoint(point)
+        engine.fileTransfers.dropUpload(itemProviders: providers, x: wire.x, y: wire.y)
+    }
+
+    /// Says where in the view the place to drag files for copying back is
+    /// showing, or that it is not. The Mac is told which part of its own
+    /// screen lies under it, so that letting go there fetches the files.
+    public func setFileTarget(viewRect: CGRect?) {
+        guard let viewRect,
+              let topLeft = viewport.remotePoint(for: viewRect.origin, clamped: true),
+              let bottomRight = viewport.remotePoint(
+                for: CGPoint(x: viewRect.maxX, y: viewRect.maxY), clamped: true),
+              let remote = arrangement.remoteRect(for: CGRect(
+                x: topLeft.x, y: topLeft.y,
+                width: bottomRight.x - topLeft.x, height: bottomRight.y - topLeft.y))
+        else {
+            engine.fileTransfers.dragOutTarget = nil
+            return
+        }
+        engine.fileTransfers.dragOutTarget = remote.offsetBy(dx: remoteOrigin.x, dy: remoteOrigin.y)
+    }
+
+    /// Where files copied back from a Mac are put: the Downloads folder on a
+    /// Mac. On iPhone and iPad they wait until the user says where to.
+    public func keepFetchedFiles(of transfer: VNCFileTransfer) -> [URL] {
+        #if os(macOS)
+        guard let downloads = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first else {
+            return transfer.localURLs
+        }
+        return transfer.localURLs.map { source in
+            let destination = FileBrowser.unusedURL(for: source.lastPathComponent, in: downloads)
+            do {
+                try FileManager.default.moveItem(at: source, to: destination)
+                return destination
+            } catch {
+                return source
+            }
+        }
+        #else
+        return transfer.localURLs
+        #endif
+    }
+
     // MARK: - Engine configuration
 
     static func configuration(for computer: Computer) -> VNCConfiguration {

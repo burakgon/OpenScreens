@@ -20,6 +20,7 @@ The first release, for macOS 26, iOS 26 and iPadOS 26.
 - SSH tunnels with password or key sign-in and host key verification.
 - Shared clipboard, curtain mode, observe only, lock on disconnect,
   Wake-on-LAN, one-tap shortcuts, Type Text and connection statistics.
-- A file browser that copies files and folders both ways over SFTP.
+- Files copied to and from a Mac by dragging them onto and off its screen,
+  and a file browser that copies files and folders both ways over SFTP.
 - An app lock, a menu bar item on the Mac, `vnc://` links and Shortcuts
   actions.

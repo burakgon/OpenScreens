@@ -30,6 +30,11 @@ public struct SessionView: View {
                 #endif
                 .allowsHitTesting(isLive)
                 .accessibilityLabel("Screen of \(session.computer.displayName)")
+                .overlay {
+                    if isLive {
+                        FileTransferOverlay(session: session)
+                    }
+                }
 
             if !isLive {
                 // Keep the last picture faintly visible behind the status

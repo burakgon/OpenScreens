@@ -42,6 +42,9 @@ public final class RemoteCanvasView: NSView {
     private var edgePanTimer: Timer?
     private var edgePanVelocity = CGSize.zero
 
+    // Files being dragged over the picture
+    private var isReceivingFileDrag = false
+
     // Keyboard
     private let keyboardLayout = KeyboardLayoutTranslator()
     private var pressedModifiers: Set<ModifierKey> = []
@@ -63,6 +66,9 @@ public final class RemoteCanvasView: NSView {
         root.addSublayer(imageLayer)
         root.addSublayer(session.engine.videoBandRenderer.containerLayer)
         root.addSublayer(session.engine.secondaryVideoBandRenderer.containerLayer)
+
+        // Files dragged onto the picture are copied to the Mac it shows.
+        registerForDraggedTypes([.fileURL])
     }
 
     @available(*, unavailable)
@@ -570,6 +576,65 @@ public final class RemoteCanvasView: NSView {
             text: event.characters ?? plain,
             textWithoutOption: plain,
             shortcutText: event.charactersIgnoringModifiers?.lowercased() ?? plain)
+    }
+
+    // MARK: - Files dropped on the picture
+
+    /// The files a drag carries. Anything that is not a file on disk, a
+    /// promise or a piece of text for instance, is not something the Mac at
+    /// the other end can be handed.
+    private func fileURLs(in drag: NSDraggingInfo) -> [URL] {
+        let objects = drag.draggingPasteboard.readObjects(
+            forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true])
+        return (objects as? [URL]) ?? []
+    }
+
+    private func picturePoint(of drag: NSDraggingInfo) -> CGPoint? {
+        let point = convert(drag.draggingLocation, from: nil)
+        return session.viewport.remotePoint(
+            for: CGPoint(x: point.x, y: bounds.height - point.y), clamped: true)
+    }
+
+    public override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        guard !isReceivingFileDrag, session.canDropFiles,
+              let point = picturePoint(of: sender) else { return [] }
+        let urls = fileURLs(in: sender)
+        guard !urls.isEmpty else { return [] }
+        // A button of ours cannot be down while another app's drag is over
+        // the view, whatever was pressed before it arrived.
+        buttons = []
+        isReceivingFileDrag = session.beginFileDrag(names: urls.map(\.lastPathComponent), at: point)
+        return isReceivingFileDrag ? .copy : []
+    }
+
+    public override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        guard isReceivingFileDrag, let point = picturePoint(of: sender) else { return [] }
+        session.moveFileDrag(to: point)
+        return .copy
+    }
+
+    public override func draggingExited(_ sender: NSDraggingInfo?) {
+        endFileDrag()
+    }
+
+    public override func draggingEnded(_ sender: NSDraggingInfo) {
+        // Reached after a drop as well, by which time the drag is no longer
+        // ours to cancel.
+        endFileDrag()
+    }
+
+    public override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        guard isReceivingFileDrag, let point = picturePoint(of: sender) else { return false }
+        isReceivingFileDrag = false
+        session.dropFiles(fileURLs(in: sender), at: point)
+        lastRemotePoint = point
+        return true
+    }
+
+    private func endFileDrag() {
+        guard isReceivingFileDrag else { return }
+        isReceivingFileDrag = false
+        session.cancelFileDrag()
     }
 
     /// Releases everything that is held down. Called whenever the view stops

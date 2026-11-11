@@ -62,6 +62,9 @@ public final class RemoteCanvasView: UIView {
     let emptyInputView = UIView(frame: .zero)
     var keyboardAccessory: UIView?
 
+    /// Whether a drag of files from another app is over the picture.
+    var isReceivingFileDrag = false
+
     /// Tells the SwiftUI layer when the on-screen keyboard is shown or hidden.
     var onKeyboardVisibilityChange: ((Bool) -> Void)?
 
@@ -91,6 +94,7 @@ public final class RemoteCanvasView: UIView {
         layer.addSublayer(cursorLayer)
 
         installGestures()
+        addInteraction(UIDropInteraction(delegate: self))
         installHingeObserver()
         observeKeyboardFrame()
         session.canvasBridge.attach(self)

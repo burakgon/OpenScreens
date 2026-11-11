@@ -123,6 +123,39 @@ struct DisplayArrangementTests {
         #expect(arrangement.remotePoint(for: CGPoint(x: 1900, y: 1700)) == CGPoint(x: 3000, y: 700))
     }
 
+    // MARK: Rectangles
+
+    @Test func aRectangleInOneDisplayIsItself() {
+        let arrangement = DisplayArrangement(size: CGSize(width: 2560, height: 1600))
+        let rect = CGRect(x: 1000, y: 40, width: 560, height: 120)
+        #expect(arrangement.remoteRect(for: rect) == rect)
+    }
+
+    @Test func aRectangleInTheLowerDisplayIsInTheDisplayOnTheRight() {
+        let arrangement = DisplayArrangement(remote: [left, right], axis: .stacked)
+        let rect = CGRect(x: 700, y: 2500, width: 600, height: 100)
+        #expect(arrangement.remoteRect(for: rect) == CGRect(x: 2748, y: 100, width: 600, height: 100))
+    }
+
+    /// Across the seam of two stacked displays there is no one rectangle of
+    /// the remote desktop; what is kept is the part in the display that
+    /// holds the middle.
+    @Test func aRectangleOverTwoDisplaysIsCutToTheOneItsMiddleIsIn() {
+        let arrangement = DisplayArrangement(remote: [left, right], axis: .stacked)
+        let mostlyUpper = CGRect(x: 100, y: 2300, width: 400, height: 150)
+        #expect(arrangement.remoteRect(for: mostlyUpper) == CGRect(x: 100, y: 2300, width: 400, height: 100))
+        let mostlyLower = CGRect(x: 100, y: 2350, width: 400, height: 150)
+        #expect(arrangement.remoteRect(for: mostlyLower) == CGRect(x: 2148, y: 0, width: 400, height: 100))
+    }
+
+    @Test func aRectangleOffThePictureIsCutToWhatIsShown() {
+        let arrangement = DisplayArrangement(size: CGSize(width: 2560, height: 1600))
+        #expect(arrangement.remoteRect(for: CGRect(x: -100, y: -50, width: 300, height: 200))
+            == CGRect(x: 0, y: 0, width: 200, height: 150))
+        #expect(arrangement.remoteRect(for: CGRect(x: 3000, y: 100, width: 50, height: 50)) == nil)
+        #expect(DisplayArrangement(remote: []).remoteRect(for: CGRect(x: 0, y: 0, width: 10, height: 10)) == nil)
+    }
+
     /// Every point of the picture that is inside a display comes back inside
     /// that display's part of the remote desktop.
     @Test func everyPointLandsInTheDisplayItWasIn() {

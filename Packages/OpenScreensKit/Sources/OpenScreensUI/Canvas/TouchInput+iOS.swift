@@ -3,6 +3,7 @@ import OpenScreensCore
 import QuartzCore
 import RFBProtocol
 import UIKit
+import rootshellVNC
 
 /// Bookkeeping for gestures in progress.
 struct TouchState {
@@ -138,7 +139,7 @@ extension RemoteCanvasView: UIGestureRecognizerDelegate {
         session.remotePixelsPerPoint
     }
 
-    private func setPointer(_ remote: CGPoint, send: Bool = true) {
+    func setPointer(_ remote: CGPoint, send: Bool = true) {
         let size = session.arrangement.size
         pointerLocation = CGPoint(
             x: min(max(0, remote.x), max(0, size.width - 1)),
@@ -698,6 +699,65 @@ extension RemoteCanvasView: UIPointerInteractionDelegate {
         guard session.isConnected, !session.settings.observeOnly,
               session.engine.activeCursorRendering == .client else { return nil }
         return .hidden()
+    }
+}
+
+// MARK: - Files dropped on the picture
+
+/// Files dragged in from another app, the Files app beside this one for
+/// instance, are copied to the Mac the picture shows: into whatever the drop
+/// lands on there. While the drag is over the picture the Mac shows a drag of
+/// its own under it.
+extension RemoteCanvasView: UIDropInteractionDelegate {
+    private func picturePoint(of drop: UIDropSession) -> CGPoint? {
+        session.viewport.remotePoint(for: drop.location(in: self), clamped: true)
+    }
+
+    public func dropInteraction(_ interaction: UIDropInteraction, canHandle session: UIDropSession) -> Bool {
+        self.session.canDropFiles && session.items.contains {
+            VNCFileTransferController.fileType(for: $0.itemProvider) != nil
+        }
+    }
+
+    public func dropInteraction(_ interaction: UIDropInteraction, sessionDidEnter session: UIDropSession) {
+        guard !isReceivingFileDrag, let point = picturePoint(of: session) else { return }
+        let names = session.items.compactMap {
+            VNCFileTransferController.suggestedName(for: $0.itemProvider)
+        }
+        guard !names.isEmpty else { return }
+        isReceivingFileDrag = self.session.beginFileDrag(names: names, at: point)
+    }
+
+    public func dropInteraction(
+        _ interaction: UIDropInteraction, sessionDidUpdate session: UIDropSession
+    ) -> UIDropProposal {
+        guard isReceivingFileDrag, let point = picturePoint(of: session) else {
+            return UIDropProposal(operation: .cancel)
+        }
+        self.session.moveFileDrag(to: point)
+        return UIDropProposal(operation: .copy)
+    }
+
+    public func dropInteraction(_ interaction: UIDropInteraction, sessionDidExit session: UIDropSession) {
+        endFileDrag()
+    }
+
+    public func dropInteraction(_ interaction: UIDropInteraction, performDrop session: UIDropSession) {
+        guard isReceivingFileDrag, let point = picturePoint(of: session) else { return }
+        isReceivingFileDrag = false
+        self.session.dropFiles(session.items.map(\.itemProvider), at: point)
+        // The Mac's pointer is where the files landed; keep ours with it.
+        setPointer(point, send: false)
+    }
+
+    public func dropInteraction(_ interaction: UIDropInteraction, sessionDidEnd session: UIDropSession) {
+        endFileDrag()
+    }
+
+    private func endFileDrag() {
+        guard isReceivingFileDrag else { return }
+        isReceivingFileDrag = false
+        session.cancelFileDrag()
     }
 }
 #endif
