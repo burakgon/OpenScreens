@@ -110,7 +110,7 @@ and notarised by Apple. Requires macOS 26 or later.
 
 **iPhone and iPad** — not on the App Store yet. Until the TestFlight beta
 opens, [build it yourself](#building-from-source). Requires iOS or iPadOS 26
-or later.
+or later. The same app runs on iPhone, on the folding iPhone Duo and on iPad.
 
 ## Getting started
 
@@ -120,6 +120,12 @@ Apple silicon and macOS 14 or later.
 
 In OpenScreens, pick the Mac from **Nearby**, or choose **Add Computer** and
 type its name or address. Sign in with your account on that Mac.
+
+The first time it runs, OpenScreens asks whether it may find devices on your
+local network. Allow it: macOS and iOS otherwise keep an app from every
+computer on your network, and a connection to one just never answers. The
+switch is under **Privacy & Security › Local Network** in System Settings if
+you change your mind.
 
 For a PC or a Raspberry Pi, set up a VNC server on it and add the computer
 the same way.
