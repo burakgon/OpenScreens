@@ -10,10 +10,14 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  test:
-    name: Tests
+  # One job, on purpose. Runners for the Xcode 27 image can be scarce: with
+  # the tests and the two builds as separate jobs, one of them was regularly
+  # still waiting for a runner when GitHub gave up on it. Everything here
+  # needs a runner only once.
+  check:
+    name: Tests and builds
     runs-on: xcode-27
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v5
       - name: Select Xcode
@@ -24,34 +28,17 @@ jobs:
         run: >
           swift test --package-path Vendor/rootshell-vnc
           --filter "RFBProtocolTests|RFBTransportTests"
-
-  # Runners for the Xcode 27 image can be scarce. Three jobs asking for one
-  # at once have left two waiting until GitHub gave up on them, so the jobs
-  # take turns.
-  build:
-    name: Build (${{ matrix.name }})
-    needs: test
-    runs-on: xcode-27
-    timeout-minutes: 45
-    strategy:
-      fail-fast: false
-      max-parallel: 1
-      matrix:
-        include:
-          - name: Mac
-            scheme: OpenScreens
-            destination: platform=macOS
-          - name: iPhone and iPad
-            scheme: OpenScreens iOS
-            destination: generic/platform=iOS Simulator
-    steps:
-      - uses: actions/checkout@v5
-      - name: Select Xcode
-        run: sudo xcode-select -s /Applications/Xcode_27.2.app
-      - name: Build
+      - name: Build the Mac app
         run: >
           xcodebuild build
           -project OpenScreens.xcodeproj
-          -scheme "${{ matrix.scheme }}"
-          -destination "${{ matrix.destination }}"
+          -scheme "OpenScreens"
+          -destination "platform=macOS"
+          CODE_SIGNING_ALLOWED=NO
+      - name: Build the iPhone and iPad app
+        run: >
+          xcodebuild build
+          -project OpenScreens.xcodeproj
+          -scheme "OpenScreens iOS"
+          -destination "generic/platform=iOS Simulator"
           CODE_SIGNING_ALLOWED=NO
