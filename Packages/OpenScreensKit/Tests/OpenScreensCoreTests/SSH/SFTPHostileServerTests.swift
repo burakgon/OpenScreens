@@ -1108,6 +1108,19 @@ extension SSHTests {
             }
         }
 
+        @Test func aNameOfMegabytesIsNotPutOnScreen() async throws {
+            try await SFTPTestServer.run { server in
+                server.volume.addFile("short.txt")
+                server.volume.addFile(String(repeating: "long", count: 1 << 18))
+                let client = try await server.connect()
+                let sftp = try await client.openSFTP()
+                let listing = try await sftp.listing(of: "/")
+                #expect(listing.items.map(\.name) == ["short.txt"])
+                #expect(listing.unusableNameCount == 1)
+                await client.close()
+            }
+        }
+
         @Test func aFolderOfUsableNamesIsCopiedInFull() async throws {
             try await SFTPTestServer.run { server in
                 let local = try TemporaryDirectory()

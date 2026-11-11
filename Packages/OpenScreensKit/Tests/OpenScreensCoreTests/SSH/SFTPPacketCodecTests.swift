@@ -407,5 +407,31 @@ extension SSHTests {
                 == "The folder holds more than \(100_000.formatted()) items, "
                     + "which is more than can be handled at once.")
         }
+
+        /// What a server says for itself ends up in front of the user. It
+        /// can say a great deal, and not all of it in words.
+        @Test func aServersExplanationIsCutDownToWhatCanBeShown() throws {
+            let prefix = "The server could not complete the operation: "
+            func described(_ message: String) throws -> String {
+                try #require(SFTPError.status(code: .failure, message: message).errorDescription)
+            }
+
+            // A megabyte of explanation is a few lines of it and a sign that
+            // there was more.
+            let long = try described(String(repeating: "no ", count: 350_000))
+            #expect(long.hasPrefix(prefix + "no no no "))
+            #expect(long.hasSuffix("…"))
+            #expect(long.count == prefix.count + SFTPError.shownMessageLimit + 1)
+
+            // Exactly as much as is shown is shown as it is.
+            let fitting = String(repeating: "x", count: SFTPError.shownMessageLimit)
+            #expect(try described(fitting) == prefix + fitting)
+
+            // Bells, escapes and NULs are left out, and a line break or a
+            // tab is a space.
+            #expect(try described("Disk\u{07} \u{1B}[31mfull\0\r\nTry\tlater") == prefix + "Disk [31mfull Try later")
+            // An explanation of nothing but those is no explanation.
+            #expect(try described("\0\u{1B}\u{07}") == "The server could not complete the operation (code 4).")
+        }
     }
 }

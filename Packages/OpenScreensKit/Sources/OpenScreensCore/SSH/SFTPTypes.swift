@@ -59,6 +59,11 @@ public enum SFTPError: Error, Equatable, Sendable {
 }
 
 extension SFTPError: LocalizedError {
+    /// The most of a server's own explanation that is put in front of the
+    /// user, in characters. A server's message can be as long as a packet,
+    /// and the place it ends up in is an alert.
+    static let shownMessageLimit = 300
+
     public var errorDescription: String? {
         switch self {
         case .status(.noSuchFile, _):
@@ -68,9 +73,8 @@ extension SFTPError: LocalizedError {
         case .status(.operationUnsupported, _):
             "The server does not support this operation."
         case .status(let code, let message):
-            message.isEmpty
-                ? "The server could not complete the operation (code \(code.rawValue))."
-                : "The server could not complete the operation: \(message)"
+            Self.shown(message).map { "The server could not complete the operation: \($0)" }
+                ?? "The server could not complete the operation (code \(code.rawValue))."
         case .unsupportedVersion(let version):
             "The server uses SFTP version \(version), which is not supported."
         case .invalidResponse(let detail):
@@ -84,6 +88,27 @@ extension SFTPError: LocalizedError {
         case .tooManyEntries(let limit):
             "The folder holds more than \(limit.formatted()) items, which is more than can be handled at once."
         }
+    }
+
+    /// A server's own explanation made fit to be shown: the start of it,
+    /// without the characters that are not text at all, such as bells,
+    /// escapes and NULs, and with line breaks and tabs turned into spaces.
+    /// `nil` when nothing is left to show.
+    private static func shown(_ message: String) -> String? {
+        // Only the start is looked at, whatever the length of the rest.
+        let start = message.unicodeScalars.prefix(4 * shownMessageLimit)
+        var text = String.UnicodeScalarView()
+        for scalar in start {
+            if scalar == "\n" || scalar == "\t" {
+                text.append(" ")
+            } else if scalar.properties.generalCategory != .control {
+                text.append(scalar)
+            }
+        }
+        let shown = String(text).trimmingCharacters(in: .whitespaces)
+        guard !shown.isEmpty else { return nil }
+        let wasCut = start.endIndex < message.unicodeScalars.endIndex || shown.count > shownMessageLimit
+        return wasCut ? shown.prefix(shownMessageLimit) + "…" : shown
     }
 }
 
@@ -289,6 +314,12 @@ public enum SFTPPath {
         return String(path[...slash]) + name
     }
 
+    /// The longest name taken for a name, in bytes. No file system in use
+    /// lets one entry be called anything longer: most stop at 255, and the
+    /// most generous at about a thousand. A server can send megabytes under
+    /// the heading of a name, and a name is something that is shown.
+    static let maximumNameLength = 1024
+
     /// Whether `name` can stand for one entry of a folder, on the server or
     /// in the local folder a remote entry is copied to.
     ///
@@ -299,9 +330,12 @@ public enum SFTPPath {
     /// that is not "/", and the slash in it still separates folders. Taken at
     /// face value, a name like that lets a server put a download outside the
     /// folder it was aimed at.
+    ///
+    /// It also has to be no longer than ``maximumNameLength``.
     public static func isUsableName(_ name: String) -> Bool {
         let bytes = name.utf8
-        guard !bytes.isEmpty, !bytes.elementsEqual(".".utf8), !bytes.elementsEqual("..".utf8) else {
+        guard !bytes.isEmpty, bytes.count <= maximumNameLength,
+              !bytes.elementsEqual(".".utf8), !bytes.elementsEqual("..".utf8) else {
             return false
         }
         return !bytes.contains { $0 == UInt8(ascii: "/") || $0 == 0 }

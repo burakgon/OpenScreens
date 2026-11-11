@@ -34,6 +34,16 @@ extension SSHTests {
             #expect(!SFTPPath.isUsableName(name))
         }
 
+        @Test func aNameLongerThanAnyFileSystemAllowsIsNotAName() {
+            let longest = String(repeating: "n", count: SFTPPath.maximumNameLength)
+            #expect(SFTPPath.isUsableName(longest))
+            #expect(!SFTPPath.isUsableName(longest + "n"))
+            // The length is the length in bytes, as it is to a file system.
+            let wide = String(repeating: "日", count: SFTPPath.maximumNameLength / 3)
+            #expect(SFTPPath.isUsableName(wide))
+            #expect(!SFTPPath.isUsableName(wide + "日"))
+        }
+
         @Test func aSlashIsFoundAmongTheBytesNotTheCharacters() {
             // This is the name that passed a search for the character "/":
             // the slash and the accent after it are one character.
