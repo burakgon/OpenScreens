@@ -10,6 +10,29 @@ public enum SSHCredential: Sendable {
     case key(SSHPrivateKey)
 }
 
+// A password must not end up in a log or a crash report because the
+// credential, or something that holds one such as an ``SSHTunnelFactory``,
+// was printed or interpolated into a string somewhere.
+extension SSHCredential: CustomStringConvertible, CustomDebugStringConvertible {
+    public var description: String {
+        switch self {
+        case .password: "SSHCredential.password(redacted)"
+        case .key: "SSHCredential.key(redacted)"
+        }
+    }
+
+    public var debugDescription: String { description }
+}
+
+// The same goes for everything that looks inside a value instead of asking
+// it for a description: `dump`, the debugger, and a test that prints what it
+// compared. There is nothing for them to see.
+extension SSHCredential: CustomReflectable {
+    public var customMirror: Mirror {
+        Mirror(self, children: EmptyCollection<Mirror.Child>())
+    }
+}
+
 /// A server's host key, put to a host key policy for a decision.
 public struct SSHHostKeyChallenge: Sendable {
     /// The server being connected to, as the caller named it.
