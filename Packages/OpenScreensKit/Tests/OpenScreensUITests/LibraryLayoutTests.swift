@@ -16,7 +16,10 @@ import Testing
 struct LibraryLayoutTests {
 
     private func makeModel() throws -> AppModel {
-        let suite = "OpenScreensTests-\(UUID().uuidString)"
+        // Named by a path in the temporary directory: a plain name would
+        // become a file in ~/Library/Preferences for every run.
+        let suite = FileManager.default.temporaryDirectory
+            .appending(path: "OpenScreensTests-\(UUID().uuidString)").path
         let defaults = try #require(UserDefaults(suiteName: suite))
         let settings = AppSettings(defaults: defaults)
         // Nothing here asks Tailscale about anyone's real tailnet.

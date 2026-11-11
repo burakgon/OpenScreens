@@ -20,7 +20,10 @@ struct SessionEndToEndTests {
         let server = RFBTestServer(image: image, configuration: .init(password: password))
         let port = try await server.start()
 
-        let suite = "OpenScreensTests-\(UUID().uuidString)"
+        // Named by a path in the temporary directory: a plain name would
+        // become a file in ~/Library/Preferences for every run.
+        let suite = FileManager.default.temporaryDirectory
+            .appending(path: "OpenScreensTests-\(UUID().uuidString)").path
         let defaults = try #require(UserDefaults(suiteName: suite))
         let model = AppModel(
             library: LibraryStore(fileURL: nil, backupsDirectory: nil),
