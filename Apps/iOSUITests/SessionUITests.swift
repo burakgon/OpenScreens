@@ -141,6 +141,28 @@ final class SessionUITests: XCTestCase {
         XCTAssertFalse(pointerEvents().contains { $0.buttons == 1 }, "a left click arrived too")
     }
 
+    /// The top of a remote Mac's screen is its menu bar, and where the
+    /// picture reaches the top of the device that is a strip the system may
+    /// keep for a gesture of its own. A tap there is a click all the same,
+    /// and only one.
+    func testATapAtTheTopEdgeOfTheScreenStillClicks() async throws {
+        let canvas = try await launch(touch: "touch")
+
+        canvas.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0))
+            .withOffset(CGVector(dx: 0, dy: 6))
+            .tap()
+
+        let clicked = await server.waitForEvents { events in
+            events.contains { if case .pointer(_, _, 1) = $0 { true } else { false } }
+        }
+        XCTAssertTrue(clicked, "no click arrived: \(pointerEvents())")
+        // Long enough for a tap the system held back to be delivered late.
+        try await Task.sleep(for: .seconds(2))
+        XCTAssertEqual(
+            pointerEvents().filter { $0.buttons == 1 }.count, 1,
+            "one tap was more than one click: \(pointerEvents())")
+    }
+
     func testPressingAndDraggingHoldsTheButtonDown() async throws {
         let canvas = try await launch(touch: "touch")
         let start = CGVector(dx: 0.3, dy: 0.45)

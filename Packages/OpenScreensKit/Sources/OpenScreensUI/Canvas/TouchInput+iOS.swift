@@ -11,9 +11,21 @@ struct TouchState {
         case undecided, scroll, zoom
     }
 
+    /// A tap, by how many fingers made it and where.
+    struct Tap {
+        var fingers: Int
+        var viewPoint: CGPoint
+        var time: TimeInterval
+    }
+
     var lastTapTime: TimeInterval = 0
     var lastTapViewPoint = CGPoint.zero
     var lastTapRemotePoint = CGPoint.zero
+
+    /// A tap UIKit has asked about and not delivered yet.
+    var awaitedTap: Tap?
+    /// The last tap made without waiting for UIKit to deliver it.
+    var undeliveredTap: Tap?
 
     var isDragging = false
     var dragButton: PointerButtons = .left
@@ -124,7 +136,68 @@ extension RemoteCanvasView: UIGestureRecognizerDelegate {
     }
 
     public override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
-        session.isConnected
+        guard session.isConnected else { return false }
+        if let tap = gestureRecognizer as? UITapGestureRecognizer, tap.view === self {
+            expectDelivery(of: tap)
+        }
+        return true
+    }
+
+    // MARK: Taps the system holds back
+
+    /// How long a tap's handler may take to follow the question about it.
+    /// It normally follows in the same turn of the run loop.
+    private static let tapDeliveryAllowance: Duration = .milliseconds(60)
+
+    /// Notes a tap UIKit is about to deliver, and makes it if UIKit then
+    /// does not.
+    ///
+    /// The system keeps strips of some screens for gestures of its own. On
+    /// most, a tap in one is still delivered. Along the top of an unfolded
+    /// iPhone Duo, as its simulator has it, it is not: the touches arrive,
+    /// UIKit asks whether the tap may begin, and the handler never runs. A
+    /// remote Mac's menu bar is drawn in exactly that strip, so a tap that
+    /// was asked about and not delivered is made here instead.
+    private func expectDelivery(of recognizer: UITapGestureRecognizer) {
+        let tap = TouchState.Tap(
+            fingers: recognizer.numberOfTouchesRequired,
+            viewPoint: recognizer.location(in: self),
+            time: CACurrentMediaTime())
+        touchState.awaitedTap = tap
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: Self.tapDeliveryAllowance)
+            guard let self, let awaited = self.touchState.awaitedTap, awaited.time == tap.time else { return }
+            self.touchState.awaitedTap = nil
+            self.touchState.undeliveredTap = TouchState.Tap(
+                fingers: tap.fingers, viewPoint: tap.viewPoint, time: CACurrentMediaTime())
+            self.tap(fingers: tap.fingers, at: tap.viewPoint)
+        }
+    }
+
+    /// Called as UIKit delivers a tap. False when that tap was already made
+    /// without waiting, so that a late delivery is not a second tap.
+    private func takeDelivery(of recognizer: UITapGestureRecognizer) -> Bool {
+        let fingers = recognizer.numberOfTouchesRequired
+        if touchState.awaitedTap?.fingers == fingers {
+            touchState.awaitedTap = nil
+        }
+        guard let made = touchState.undeliveredTap, made.fingers == fingers else { return true }
+        let point = recognizer.location(in: self)
+        let isTheSameTap = CACurrentMediaTime() - made.time < 1.5
+            && hypot(point.x - made.viewPoint.x, point.y - made.viewPoint.y) < 6
+        if isTheSameTap {
+            touchState.undeliveredTap = nil
+        }
+        return !isTheSameTap
+    }
+
+    /// What a tap with that many fingers does.
+    private func tap(fingers: Int, at viewPoint: CGPoint) {
+        switch fingers {
+        case 1: click(at: viewPoint)
+        case 2: secondaryClick(at: viewPoint)
+        default: middleClick(at: viewPoint)
+        }
     }
 
     // MARK: Coordinates
@@ -159,6 +232,21 @@ extension RemoteCanvasView: UIGestureRecognizerDelegate {
     // MARK: Taps
 
     @objc private func handleTap(_ recognizer: UITapGestureRecognizer) {
+        guard takeDelivery(of: recognizer) else { return }
+        tap(fingers: 1, at: recognizer.location(in: self))
+    }
+
+    @objc private func handleTwoFingerTap(_ recognizer: UITapGestureRecognizer) {
+        guard takeDelivery(of: recognizer) else { return }
+        tap(fingers: 2, at: recognizer.location(in: self))
+    }
+
+    @objc private func handleThreeFingerTap(_ recognizer: UITapGestureRecognizer) {
+        guard takeDelivery(of: recognizer) else { return }
+        tap(fingers: 3, at: recognizer.location(in: self))
+    }
+
+    private func click(at viewPoint: CGPoint) {
         guard session.canSendInput else { return }
         claimFocus()
         stopMomentum()
@@ -166,7 +254,6 @@ extension RemoteCanvasView: UIGestureRecognizerDelegate {
             session.click(.left, at: pointerLocation)
             return
         }
-        let viewPoint = recognizer.location(in: self)
         guard var remote = remotePoint(at: viewPoint) else { return }
         // A second tap that lands close to the first is a double-click; send
         // it at exactly the same pixel so the remote computer agrees.
@@ -182,19 +269,19 @@ extension RemoteCanvasView: UIGestureRecognizerDelegate {
         session.click(.left, at: remote)
     }
 
-    @objc private func handleTwoFingerTap(_ recognizer: UITapGestureRecognizer) {
+    private func secondaryClick(at viewPoint: CGPoint) {
         guard session.canSendInput else { return }
         claimFocus()
-        if !isTrackpadMode, let remote = remotePoint(at: recognizer.location(in: self)) {
+        if !isTrackpadMode, let remote = remotePoint(at: viewPoint) {
             setPointer(remote, send: false)
         }
         haptic()
         session.click(.right, at: pointerLocation)
     }
 
-    @objc private func handleThreeFingerTap(_ recognizer: UITapGestureRecognizer) {
+    private func middleClick(at viewPoint: CGPoint) {
         guard session.canSendInput else { return }
-        if !isTrackpadMode, let remote = remotePoint(at: recognizer.location(in: self)) {
+        if !isTrackpadMode, let remote = remotePoint(at: viewPoint) {
             setPointer(remote, send: false)
         }
         session.click(.middle, at: pointerLocation)
