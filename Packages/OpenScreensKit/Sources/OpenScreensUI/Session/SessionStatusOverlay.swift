@@ -112,6 +112,7 @@ private struct ProgressCard: View {
 }
 
 private struct FailureCard: View {
+    @Environment(AppModel.self) private var model
     let computer: Computer
     let message: String
     /// Sends a Wake-on-LAN packet first, for computers with an address saved.
@@ -132,6 +133,23 @@ private struct FailureCard: View {
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
                 .textSelection(.enabled)
+            if model.nearby.state == .denied {
+                // Looking for computers has found that the system keeps the
+                // app off the local network, which would explain this too:
+                // a computer on it never answers.
+                VStack(spacing: 6) {
+                    Text("OpenScreens is not allowed to use your local network, so it cannot reach computers on it.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Button("Open Local Network Settings") {
+                        SystemSettings.openLocalNetworkPrivacy()
+                    }
+                    .buttonStyle(.borderless)
+                    .font(.footnote)
+                }
+            }
             HStack(spacing: 12) {
                 Button("Close", role: .cancel, action: onClose)
                     .buttonStyle(.glass)
