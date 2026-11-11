@@ -169,7 +169,8 @@ public final class SSHClient: Sendable {
     ///   - timeout: How long the server may take to accept the connection,
     ///     and again to complete the SSH handshake and sign-in. Time spent in
     ///     `hostKeyPolicy` does not count. The same allowance later applies
-    ///     to opening each channel.
+    ///     to opening each channel, and to each replacement of the
+    ///     connection's keys, during which its channels have to wait.
     /// - Throws: ``SSHError``, or `CancellationError` when the calling task is
     ///   cancelled, which also abandons the attempt.
     public static func connect(

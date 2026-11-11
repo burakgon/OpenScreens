@@ -137,6 +137,11 @@ final class SSHConnectionLog: Sendable {
 /// handed to the network, which swift-nio-ssh only does as the peer's window
 /// allows.
 ///
+/// **Key exchanges.** Whatever makes the channel send something goes through
+/// the connection's ``SSHKeyExchangeGate``, and waits there while the
+/// connection's keys are being replaced. That includes asking the channel
+/// for data, because delivering it is what extends the peer's window.
+///
 /// There is one reader at a time. A second concurrent read is refused.
 final class SSHChannelStream: Sendable {
     /// How many unread bytes may wait in user space before the stream stops
