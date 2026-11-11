@@ -10,7 +10,7 @@ public struct LibraryView: View {
     @Environment(\.openSettings) private var openSettings
     #endif
 
-    @State private var filter: LibraryFilter? = .all
+    @State private var filter: LibraryFilter?
     @State private var searchText = ""
     @State private var selection = Set<Computer.ID>()
     @State private var editor: ComputerEditor.Request?
@@ -23,7 +23,10 @@ public struct LibraryView: View {
     @State private var filesComputer: Computer?
     #endif
 
-    public init() {}
+    /// - Parameter section: The section of the library to open at.
+    public init(showing section: LibraryFilter = .all) {
+        _filter = State(initialValue: section)
+    }
 
     private var activeFilter: LibraryFilter { filter ?? .all }
 
@@ -416,6 +419,21 @@ private struct EmptyLibraryView: View {
     let onQuickConnect: () -> Void
 
     var body: some View {
+        // A scroll view, so that the text is never squeezed and a short
+        // window still reaches all of it. It also keeps the height this
+        // needs from becoming the least height of the split view: on the
+        // Mac, a split view taller than its window is centred in it, which
+        // puts the top of the sidebar out of sight.
+        ScrollView {
+            message
+                .padding(32)
+                .frame(maxWidth: .infinity)
+        }
+        .defaultScrollAnchor(.center, for: .alignment)
+        .scrollBounceBehavior(.basedOnSize)
+    }
+
+    private var message: some View {
         VStack(spacing: 22) {
             Image(systemName: "macbook.and.iphone")
                 .font(.system(size: 58, weight: .ultraLight))
@@ -452,8 +470,6 @@ private struct EmptyLibraryView: View {
             .padding(.top, 8)
             .frame(maxWidth: 460)
         }
-        .padding(32)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var quickConnectButton: some View {
@@ -482,7 +498,6 @@ private struct EmptyLibraryView: View {
             Text(text)
                 .font(.callout)
                 .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
         }
     }
 }
