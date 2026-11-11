@@ -1096,6 +1096,16 @@ public final class VNCSession {
     /// one, and must never share its decoder or band compositor.
     @ObservationIgnored
     public let secondaryVideoBandRenderer = VideoBandLayerRenderer()
+
+    /// How many pictures each video source of each display has decoded.
+    ///
+    /// A display's picture is cut into tiles, each its own source, and only
+    /// the tiles that changed are sent. So no single count is the frame
+    /// rate: the decoder's total counts tiles, and the renderer's commits
+    /// count a picture twice when its tiles arrive in two batches. The tile
+    /// that changes most is the best witness, and a host that shows a frame
+    /// rate takes the largest increase among a display's sources.
+    public let videoSourceFrames = VideoSourceFrameCounter()
     var primaryVideoDecodeProgress: VideoStreamManager.DecodeProgress? {
         videoStreamManager?.decodeProgress
     }
@@ -4474,9 +4484,11 @@ public final class VNCSession {
         // output and on-screen result can be compared for the same session.
         let frameDumper = DiagnosticFrameDumper.fromEnvironment()
         let decodedBands = DecodedBandTracker()
+        let sourceFrames = videoSourceFrames
         let callback: VideoStreamManager.FrameCallback = { pixelBuffer, ssrc in
             frameDumper?.maybeDump(pixelBuffer, ssrc: ssrc)
             decodedBands.record(ssrc)
+            sourceFrames.record(ssrc, display: 0)
             coalescer.submit(ssrc: ssrc, pixelBuffer: pixelBuffer)
         }
 
@@ -4533,6 +4545,7 @@ public final class VNCSession {
                 numberOfTiles: initialTileCount
             ) { pixelBuffer, ssrc in
                 secondDecodedBands.record(ssrc)
+                sourceFrames.record(ssrc, display: 1)
                 secondCoalescer.submit(ssrc: ssrc, pixelBuffer: pixelBuffer)
             }
             secondaryManager = secondManager
@@ -5186,6 +5199,47 @@ final class DiagnosticFrameDumper: @unchecked Sendable {
             CGImageDestinationFinalize(dest)
         }
         #endif
+    }
+}
+
+/// Decoded pictures by video source, for each display. Counts only go up;
+/// a renegotiated stream brings new sources and leaves the old ones behind.
+public final class VideoSourceFrameCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var counts: [[UInt32: UInt64]] = [[:], [:]]
+
+    init() {}
+
+    func record(_ ssrc: UInt32, display: Int) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard counts.indices.contains(display) else { return }
+        // A long session renegotiates many times; keep the table from
+        // growing without end by starting over once it is far larger than
+        // any one generation needs.
+        if counts[display].count > 64, counts[display][ssrc] == nil {
+            counts[display].removeAll(keepingCapacity: true)
+        }
+        counts[display][ssrc, default: 0] &+= 1
+    }
+
+    /// The counts as they stand: one table for each display, by source.
+    public func snapshot() -> [[UInt32: UInt64]] {
+        lock.lock()
+        defer { lock.unlock() }
+        return counts
+    }
+
+    /// The most pictures any one source of a display gained between two
+    /// snapshots: that display's frame count over the time between them.
+    public static func frames(from earlier: [[UInt32: UInt64]], to later: [[UInt32: UInt64]]) -> [UInt64] {
+        later.enumerated().map { display, sources in
+            let before = earlier.indices.contains(display) ? earlier[display] : [:]
+            return sources.reduce(0) { most, source in
+                let was = before[source.key] ?? 0
+                return max(most, source.value >= was ? source.value - was : source.value)
+            }
+        }
     }
 }
 
