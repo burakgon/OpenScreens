@@ -27,7 +27,7 @@ jobs:
       - name: Engine tests
         run: >
           swift test --package-path Vendor/rootshell-vnc
-          --filter "RFBProtocolTests|RFBTransportTests|VideoSourceFrameCounterTests"
+          --filter "RFBProtocolTests|RFBTransportTests|VideoSourceFrameCounterTests|FileTransferNameTests"
       - name: Build the Mac app
         run: >
           xcodebuild build

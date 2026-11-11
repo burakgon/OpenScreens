@@ -721,10 +721,20 @@ public final class VNCFileTransferController {
         }
     }
 
+    /// One code point at a time. Searching the text for "/" steps over a
+    /// slash that has a combining mark or a joiner after it, since the two
+    /// make one character that is not "/", and the file system would still
+    /// split the name there: a Mac that named an item "../" and an accent
+    /// would have it saved one folder above where downloads go.
     nonisolated static func sanitizedName(_ name: String) -> String {
-        let cleaned = name.replacingOccurrences(of: "/", with: ":")
-            .replacingOccurrences(of: "\0", with: "")
-        return cleaned.isEmpty || cleaned == "." || cleaned == ".." ? "File" : cleaned
+        var scalars = String.UnicodeScalarView()
+        for scalar in name.unicodeScalars where scalar != "\0" {
+            scalars.append(scalar == "/" ? ":" : scalar)
+        }
+        let cleaned = String(scalars)
+        let bytes = cleaned.utf8
+        return bytes.isEmpty || bytes.elementsEqual(".".utf8) || bytes.elementsEqual("..".utf8)
+            ? "File" : cleaned
     }
 
     /// Link-aware: a dangling symbolic link still counts as taken.
