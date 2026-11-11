@@ -291,6 +291,7 @@ enum DebugAutomation {
     ///     win=1100x640      resize the session's window (macOS), in points
     ///     drop=/path@640,400  drop a file on the picture at that pixel
     ///     drag=300,300>900,200  press at the first pixel, drag to the second, let go
+    ///     send=/path>~/Downloads  copy a file straight into a folder on the Mac
     ///     clip=text         put text on the remote clipboard
     ///     curtain=on|off    hide or show the remote Mac's own screen
     ///     lock=1            end the session, as closing its window does
@@ -368,6 +369,15 @@ enum DebugAutomation {
                 }
                 try? await Task.sleep(for: .milliseconds(500))
                 session.dropFiles([url], at: point)
+            case "send":
+                let parts = argument.split(separator: ">", maxSplits: 1).map(String.init)
+                guard parts.count == 2 else { continue }
+                if parts[1] == "~/Downloads" {
+                    // The way the Send Files command does it.
+                    session.sendFiles([URL(fileURLWithPath: parts[0])])
+                } else {
+                    session.fileTransfers.upload([URL(fileURLWithPath: parts[0])], toRemoteFolder: parts[1])
+                }
             case "drag":
                 let ends = argument.split(separator: ">").map {
                     $0.split(separator: ",").compactMap { Double($0) }

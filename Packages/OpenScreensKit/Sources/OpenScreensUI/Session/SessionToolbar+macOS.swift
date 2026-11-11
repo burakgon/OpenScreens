@@ -13,6 +13,7 @@ struct SessionToolbar: ToolbarContent {
     @State private var showsCurtainPrompt = false
     @State private var showsInspector = false
     @State private var showsTypeText = false
+    @State private var showsFilePicker = false
 
     private var isLive: Bool { session.isConnected }
 
@@ -73,6 +74,12 @@ struct SessionToolbar: ToolbarContent {
                 Button("Browse Files…", systemImage: "folder") {
                     openWindow(id: WindowID.files, value: session.computer)
                 }
+                if session.fileTransfers.canUpload {
+                    Button("Send Files…", systemImage: "arrow.up.doc") {
+                        showsFilePicker = true
+                    }
+                    .disabled(!session.canDropFiles)
+                }
                 Divider()
                 @Bindable var settings = model.settings
                 Toggle(isOn: $settings.showsStatisticsOverlay) {
@@ -95,6 +102,14 @@ struct SessionToolbar: ToolbarContent {
             }
             .sheet(isPresented: $showsTypeText) {
                 TypeTextSheet(session: session)
+            }
+            .fileImporter(
+                isPresented: $showsFilePicker, allowedContentTypes: [.item, .folder],
+                allowsMultipleSelection: true
+            ) { result in
+                if case .success(let urls) = result {
+                    session.sendFiles(urls)
+                }
             }
         }
     }

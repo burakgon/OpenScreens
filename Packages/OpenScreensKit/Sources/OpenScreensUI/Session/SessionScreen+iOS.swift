@@ -1,6 +1,7 @@
 #if os(iOS)
 import OpenScreensCore
 import SwiftUI
+import UniformTypeIdentifiers
 import UIKit
 
 /// A session on iPhone and iPad: the remote screen edge to edge, with the
@@ -166,6 +167,7 @@ struct FloatingToolbar: View {
     @State private var dragOffset = CGSize.zero
     @State private var screenshotURL: URL?
     @State private var showsTypeText = false
+    @State private var showsFilePicker = false
     @State private var showsFiles = false
 
     private var bridge: CanvasBridge { session.canvasBridge }
@@ -274,6 +276,12 @@ struct FloatingToolbar: View {
             Button("Browse Files…", systemImage: "folder") {
                 showsFiles = true
             }
+            if session.fileTransfers.canUpload {
+                Button("Send Files…", systemImage: "arrow.up.doc") {
+                    showsFilePicker = true
+                }
+                .disabled(!session.canDropFiles)
+            }
             Divider()
             Button("Take Screenshot", systemImage: "camera") {
                 screenshotURL = Self.writeScreenshot(of: session, scale: displayScale)
@@ -305,6 +313,15 @@ struct FloatingToolbar: View {
         .sheet(isPresented: $showsFiles, onDismiss: { session.requestKeyboardFocus() }) {
             FileBrowserView(computer: session.computer)
                 .environment(model)
+        }
+        .fileImporter(
+            isPresented: $showsFilePicker, allowedContentTypes: [.item, .folder],
+            allowsMultipleSelection: true
+        ) { result in
+            if case .success(let urls) = result {
+                session.sendFiles(urls)
+            }
+            session.requestKeyboardFocus()
         }
 
         ToolbarButton("Disconnect", systemName: "xmark", tint: .red, action: onClose)

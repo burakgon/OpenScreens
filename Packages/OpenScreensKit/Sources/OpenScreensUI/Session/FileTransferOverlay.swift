@@ -13,6 +13,9 @@ struct FileTransferOverlay: View {
     /// Transfers the user has dismissed, or that finished well long enough
     /// ago to go away by themselves.
     @State private var hidden: Set<UUID> = []
+    /// Finished uploads that are on their way out, so that each is sent off
+    /// once however many times the list changes meanwhile.
+    @State private var leaving: Set<UUID> = []
 
     private static let space = "file-transfer-canvas"
 
@@ -97,15 +100,20 @@ struct FileTransferOverlay: View {
     /// Puts finished downloads where they belong and lets finished uploads
     /// go after a moment; anything that failed stays until dismissed.
     private func settle(_ transfers: [VNCFileTransfer]) {
+        for transfer in transfers where transfer.direction == .upload && !transfer.isActive {
+            session.releaseSentFiles(of: transfer.id)
+        }
         for transfer in transfers where transfer.state == .completed {
             switch transfer.direction {
             case .download:
                 session.keepFetchedFiles(of: transfer)
             case .upload:
-                guard !hidden.contains(transfer.id) else { continue }
+                guard !hidden.contains(transfer.id), !leaving.contains(transfer.id) else { continue }
                 let id = transfer.id
+                leaving.insert(id)
                 Task {
-                    try? await Task.sleep(for: .seconds(4))
+                    try? await Task.sleep(for: .seconds(6))
+                    leaving.remove(id)
                     hidden.insert(id)
                     session.fileTransfers.remove(id)
                 }

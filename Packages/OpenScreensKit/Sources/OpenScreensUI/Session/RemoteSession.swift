@@ -574,6 +574,9 @@ public final class RemoteSession: Identifiable {
     /// Closes the connection. The session cannot be reused afterwards.
     public func end() {
         guard !hasEnded else { return }
+        for id in Array(scopedFiles.keys) {
+            releaseSentFiles(of: id)
+        }
         var lock: (press: [KeyTransition], release: [KeyTransition])?
         if isConnected {
             savePreviewIfWanted()
@@ -1120,6 +1123,32 @@ public final class RemoteSession: Identifiable {
         engine.fileTransfers.dropUpload(itemProviders: providers, x: wire.x, y: wire.y)
     }
 
+    /// Copies files to the Mac without a drag, into its Downloads folder:
+    /// the way to send something from an iPhone, where there is nowhere to
+    /// drag it from. The Mac gives a file a new name rather than replace one
+    /// that is already there.
+    public func sendFiles(_ urls: [URL]) {
+        guard canDropFiles, !urls.isEmpty else { return }
+        // Files picked through the system's browser are only readable
+        // between these two calls, and the copy outlasts this one.
+        let scoped = urls.filter { $0.startAccessingSecurityScopedResource() }
+        let known = Set(engine.fileTransfers.transfers.map(\.id))
+        engine.fileTransfers.upload(urls, toRemoteFolder: Self.remoteDownloadsFolder)
+        if let id = engine.fileTransfers.transfers.last(where: { !known.contains($0.id) })?.id {
+            scopedFiles[id] = scoped
+        } else {
+            scoped.forEach { $0.stopAccessingSecurityScopedResource() }
+        }
+    }
+
+    /// Where ``sendFiles(_:)`` puts things. The Mac works out whose home.
+    static let remoteDownloadsFolder = "~/Downloads"
+
+    /// Gives back the access taken for a transfer's files, once it is over.
+    public func releaseSentFiles(of id: UUID) {
+        scopedFiles.removeValue(forKey: id)?.forEach { $0.stopAccessingSecurityScopedResource() }
+    }
+
     /// Says where in the view the place to drag files for copying back is
     /// showing, or that it is not. The Mac is told which part of its own
     /// screen lies under it, so that letting go there fetches the files.
@@ -1140,6 +1169,8 @@ public final class RemoteSession: Identifiable {
 
     /// Where the files of finished downloads were put, by transfer.
     public private(set) var fetchedFiles: [UUID: [URL]] = [:]
+    /// Files being sent that the system lent access to, by transfer.
+    @ObservationIgnored private var scopedFiles: [UUID: [URL]] = [:]
 
     /// Puts files copied back from a Mac where the user will look for them:
     /// the Downloads folder on a Mac. On iPhone and iPad they wait where

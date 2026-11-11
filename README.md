@@ -77,8 +77,9 @@ VNC.
   while you work. Observe only. Lock the remote Mac when you disconnect.
 - **Drag and drop with a Mac.** Drop files on the picture and they are
   copied into whatever they land on there, a folder or the desktop. Drag
-  files on the Mac to the top of the picture to copy them back. Nothing to
-  set up: it uses the Screen Sharing connection itself.
+  files on the Mac to the top of the picture to copy them back. Or choose
+  **Send Files** and they go to the Mac's Downloads folder. Nothing to set
+  up: it uses the Screen Sharing connection itself.
 - **Files.** Browse the computer's folders and copy files and whole folders
   in either direction, over SFTP, with nothing to install on the other end
   beyond Remote Login or an SSH server.
