@@ -215,12 +215,11 @@ public final class RemoteCanvasView: UIView {
 
     /// Where the picture and the controls go on this screen as it is now.
     private func chromeLayout() -> SessionChromeLayout {
-        let scene = window?.windowScene
-        var statusBar = CGRect.zero
-        if let window, let frame = scene?.statusBarManager?.statusBarFrame, !frame.isEmpty {
-            statusBar = convert(frame, from: window)
-        }
-        let sensorSide: SessionChromeLayout.Side? = switch scene?.effectiveGeometry.interfaceOrientation {
+        // Only what the screen is, never what is showing on it. Asking the
+        // status bar manager for the bar's frame from here made it apply a
+        // pending change of the bar there and then, in the middle of this
+        // layout, and lay the whole window out again.
+        let sensorSide: SessionChromeLayout.Side? = switch window?.windowScene?.effectiveGeometry.interfaceOrientation {
         // Named for where the home indicator is; the sensors are opposite.
         case .landscapeRight: .left
         case .landscapeLeft: .right
@@ -236,7 +235,6 @@ public final class RemoteCanvasView: UIView {
             // What the system keeps clear so as to stay out of the screen's
             // rounded corners by moving down rather than in from the sides.
             cornerTop: edgeInsets(for: .safeArea(cornerAdaptation: .vertical)).top,
-            statusBar: statusBar,
             sensorSide: sensorSide)
     }
 

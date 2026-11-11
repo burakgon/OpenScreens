@@ -73,9 +73,10 @@ struct SessionScreen: View {
             }
         }
         .ignoresSafeArea(.keyboard)
-        .statusBarHidden(!(bridge.chromeLayout?.showsStatusBar ?? false))
-        // The picture is dark at its edges and the status bar is over black.
-        .preferredColorScheme(.dark)
+        // Always, and never as a function of the layout: whether the bar
+        // shows changes what the screen keeps clear, which is what the
+        // layout is worked out from.
+        .statusBarHidden()
         .persistentSystemOverlays(.hidden)
         // An edge of the screen is an edge of the remote desktop first: its
         // Dock, its menu bar. A swipe for the system takes a second try.
@@ -212,11 +213,8 @@ struct SessionControls: View {
             switch layout.controls {
             case .strip(let strip):
                 bar(.vertical)
-                    // A status bar shown in the strip is at its top, and the
-                    // screen's corners are at both ends.
-                    .frame(
-                        width: strip.width, height: max(strip.height - 44, 0),
-                        alignment: layout.showsStatusBar ? .bottom : .center)
+                    // The screen's corners are at both ends of the strip.
+                    .frame(width: strip.width, height: max(strip.height - 44, 0))
                     .position(x: strip.midX, y: strip.midY)
             case .floating:
                 floating(layout)

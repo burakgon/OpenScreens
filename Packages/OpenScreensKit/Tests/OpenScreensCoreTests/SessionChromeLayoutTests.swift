@@ -24,7 +24,6 @@ struct SessionChromeLayoutTests {
         // the bar and another, a moment later, for the screen without.
         let layout = SessionChromeLayout(size: CGSize(width: 1032, height: 1376), safeArea: insets(24, 0, 20, 0))
         #expect(layout.pictureInsets == .zero)
-        #expect(!layout.showsStatusBar)
         #expect(layout.controls == .floating)
     }
 
@@ -33,7 +32,6 @@ struct SessionChromeLayoutTests {
         let layout = SessionChromeLayout(size: CGSize(width: 951, height: 669), safeArea: insets(0, 0, 34, 0))
         #expect(layout.pictureInsets == .zero)
         #expect(layout.controls == .floating)
-        #expect(!layout.showsStatusBar)
     }
 
     @Test func thePictureStartsBelowWhatTheScreensCornersCutInto() {
@@ -42,7 +40,6 @@ struct SessionChromeLayoutTests {
         let inner = SessionChromeLayout(
             size: CGSize(width: 951, height: 669), safeArea: insets(0, 0, 34, 0), cornerTop: 16)
         #expect(inner.pictureInsets == insets(16, 0, 0, 0))
-        #expect(!inner.showsStatusBar)
 
         // Its cover display, with the strip down its side as well.
         let cover = SessionChromeLayout(
@@ -69,20 +66,31 @@ struct SessionChromeLayoutTests {
         #expect(hidden.pictureInsets == insets(9.5, 0, 0, 0))
     }
 
-    // MARK: The status bar
+    // MARK: Nothing the layout changes
 
-    @Test func theStatusBarIsShownWhereItHasAPlaceOfItsOwn() {
-        let upright = SessionChromeLayout(size: CGSize(width: 402, height: 874), safeArea: insets(62, 0, 34, 0))
-        #expect(upright.showsStatusBar)
-        #expect(upright.controls == .floating)
-
-        let cover = SessionChromeLayout(size: CGSize(width: 466, height: 678), safeArea: insets(0, 0, 34, 84))
-        #expect(cover.showsStatusBar)
-
-        // On its side, a phone keeps both sides clear and shows no status
-        // bar in either.
-        let sideways = SessionChromeLayout(size: CGSize(width: 874, height: 402), safeArea: insets(0, 62, 20, 62))
-        #expect(!sideways.showsStatusBar)
+    /// Version 1.1.0 showed the status bar where there was room for it. On
+    /// a device where showing it changed what the screen kept clear, each
+    /// layout undid the other and the app never came to rest. A session
+    /// hides the bar whatever the screen, and so the layout has nothing to
+    /// say about it: the same screen always gives the same layout.
+    @Test func theSameScreenAlwaysGivesTheSameLayout() {
+        let screens: [(CGSize, Viewport.Insets, CGFloat)] = [
+            (CGSize(width: 402, height: 874), insets(62, 0, 34, 0), 62),
+            (CGSize(width: 874, height: 402), insets(0, 62, 20, 62), 0),
+            (CGSize(width: 466, height: 678), insets(0, 0, 34, 84), 17.5),
+            (CGSize(width: 951, height: 669), insets(0, 0, 34, 0), 16),
+            (CGSize(width: 1032, height: 1376), insets(0, 0, 20, 0), 9.5),
+        ]
+        for (size, safeArea, cornerTop) in screens {
+            let first = SessionChromeLayout(size: size, safeArea: safeArea, cornerTop: cornerTop)
+            let again = SessionChromeLayout(size: size, safeArea: safeArea, cornerTop: cornerTop)
+            #expect(first == again)
+            // And the picture never takes less room than the safe area
+            // would have given it below the top.
+            #expect(first.pictureInsets.bottom == 0)
+            #expect(first.pictureInsets.left == safeArea.left)
+            #expect(first.pictureInsets.right == safeArea.right)
+        }
     }
 
     // MARK: The controls
@@ -115,33 +123,13 @@ struct SessionChromeLayoutTests {
         #expect(unknown.pictureInsets == insets(0, 62, 0, 62))
     }
 
-    @Test func aStatusBarInTheStripKeepsItsPlace() {
-        let layout = SessionChromeLayout(
-            size: CGSize(width: 466, height: 678), safeArea: insets(0, 0, 34, 84),
-            statusBar: CGRect(x: 382, y: 60, width: 84, height: 100))
-        #expect(layout.controls == .strip(CGRect(x: 382, y: 160, width: 84, height: 518)))
-
-        // One at the far end leaves the part above it.
-        let low = SessionChromeLayout(
-            size: CGSize(width: 466, height: 678), safeArea: insets(0, 0, 34, 84),
-            statusBar: CGRect(x: 382, y: 600, width: 84, height: 78))
-        #expect(low.controls == .strip(CGRect(x: 382, y: 0, width: 84, height: 600)))
-
-        // One somewhere else on the screen changes nothing.
-        let elsewhere = SessionChromeLayout(
-            size: CGSize(width: 466, height: 678), safeArea: insets(0, 0, 34, 84),
-            statusBar: CGRect(x: 0, y: 0, width: 300, height: 40))
-        #expect(elsewhere.controls == .strip(CGRect(x: 382, y: 0, width: 84, height: 678)))
-    }
-
     @Test func aStripTooNarrowOrTooShortIsNotUsed() {
         // The margins of an older phone on its side.
         let narrow = SessionChromeLayout(size: CGSize(width: 844, height: 390), safeArea: insets(0, 47, 21, 47))
         #expect(narrow.controls == .floating)
 
         let short = SessionChromeLayout(
-            size: CGSize(width: 466, height: 300), safeArea: insets(0, 0, 34, 84),
-            statusBar: CGRect(x: 382, y: 0, width: 84, height: 120))
+            size: CGSize(width: 466, height: 200), safeArea: insets(0, 0, 34, 84))
         #expect(short.controls == .floating)
     }
 }

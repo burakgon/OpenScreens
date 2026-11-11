@@ -7,6 +7,13 @@ import CoreGraphics
 /// desktop someone has to reach every corner of, so it stays clear of
 /// whatever would hide part of it, and takes everything else. The controls
 /// then go, where they can, in a part the picture is not using.
+///
+/// Nothing here is allowed to depend on anything the layout itself changes.
+/// Version 1.1.0 showed the status bar where the screen had room for it,
+/// and what the screen keeps clear depends on whether the bar is showing:
+/// on a device where the two disagreed, each answer undid the other, the
+/// interface never came to rest and the system ended the app. The status
+/// bar is hidden throughout a session, whatever the screen.
 public struct SessionChromeLayout: Equatable, Sendable {
     /// Which side of a screen something is on.
     public enum Side: Equatable, Sendable {
@@ -28,9 +35,6 @@ public struct SessionChromeLayout: Equatable, Sendable {
     /// How far the picture stays from each edge of the screen.
     public var pictureInsets: Viewport.Insets
     public var controls: ControlsPlacement
-    /// Whether the status bar has a place of its own, where showing it
-    /// takes nothing from the picture.
-    public var showsStatusBar: Bool
 
     /// The least the system keeps clear at the top of a screen with a
     /// sensor housing there. A status bar alone is 20 to 32 points.
@@ -46,8 +50,6 @@ public struct SessionChromeLayout: Equatable, Sendable {
     ///   - cornerTop: How far from the top the system would start content
     ///     that the screen's rounded corners must not cut into; no more
     ///     than the safe area's own top where that already clears them.
-    ///   - statusBar: Where the status bar is drawn, in the screen's
-    ///     coordinates; empty when it is hidden.
     ///   - sensorSide: The side the sensor housing is on when the screen is
     ///     on its side, if that is known. The system keeps both sides clear
     ///     then, and only one of them has something in it.
@@ -55,16 +57,16 @@ public struct SessionChromeLayout: Equatable, Sendable {
         size: CGSize,
         safeArea: Viewport.Insets,
         cornerTop: CGFloat = 0,
-        statusBar: CGRect = .zero,
         sensorSide: Side? = nil
     ) {
         self.safeArea = safeArea
         // The home indicator hides itself during a session, and nothing else
         // is at the bottom: the picture goes all the way down. At the top,
         // a sensor housing is something to stay clear of and a status bar
-        // by itself is not, since it is hidden while it has no place of its
-        // own; staying clear of it would also mean a desktop made once for
-        // the screen with the bar and again for the screen without.
+        // by itself is not: it is hidden for as long as a session is on
+        // the screen, and staying clear of it would mean a desktop made
+        // once for the screen with the bar and again for the screen
+        // without.
         //
         // The top of a Mac's screen is its menu bar, with the Apple menu in
         // one corner and the clock in the other, and a screen with rounded
@@ -86,34 +88,16 @@ public struct SessionChromeLayout: Equatable, Sendable {
                 // Both sides are kept clear and one has the sensors in it.
                 side = sensorSide == .right ? .left : .right
             }
-            var rect = CGRect(
+            let rect = CGRect(
                 x: side == .left ? 0 : size.width - safeArea.right,
                 y: 0,
                 width: side == .left ? safeArea.left : safeArea.right,
                 height: size.height)
-            // A status bar drawn in the strip keeps its place; the controls
-            // take the longer part beside it.
-            let bar = statusBar.intersection(rect)
-            if !bar.isNull, bar.height > 0 {
-                let above = bar.minY - rect.minY
-                let below = rect.maxY - bar.maxY
-                if below >= above {
-                    rect = CGRect(x: rect.minX, y: bar.maxY, width: rect.width, height: below)
-                } else {
-                    rect = CGRect(x: rect.minX, y: rect.minY, width: rect.width, height: above)
-                }
-            }
             if rect.height >= Self.shortestStrip {
                 strip = rect
             }
         }
         controls = strip.map(ControlsPlacement.strip) ?? .floating
-
-        // A status bar has room of its own beside a sensor housing at the
-        // top, and in a strip only one side has. Anywhere else it would
-        // push the picture down.
-        showsStatusBar = safeArea.top >= Self.shallowestHousing
-            || (widest >= Self.narrowestStrip && abs(safeArea.left - safeArea.right) > 1)
     }
 }
 
