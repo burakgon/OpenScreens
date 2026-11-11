@@ -289,6 +289,8 @@ enum DebugAutomation {
     ///                       code and the flags that are down afterwards
     ///     c=640,400         click at this pixel of the picture
     ///     win=1100x640      resize the session's window (macOS), in points
+    ///     drop=/path@640,400  drop a file on the picture at that pixel
+    ///     drag=300,300>900,200  press at the first pixel, drag to the second, let go
     ///     clip=text         put text on the remote clipboard
     ///     curtain=on|off    hide or show the remote Mac's own screen
     ///     lock=1            end the session, as closing its window does
@@ -346,6 +348,45 @@ enum DebugAutomation {
                 try? await Task.sleep(for: .milliseconds(90))
                 session.pointer(buttons: [], at: point)
                 try? await Task.sleep(for: .milliseconds(250))
+            case "drop":
+                guard let at = argument.lastIndex(of: "@") else { continue }
+                let url = URL(fileURLWithPath: String(argument[..<at]))
+                let parts = argument[argument.index(after: at)...].split(separator: ",").compactMap { Double($0) }
+                guard parts.count == 2 else { continue }
+                let point = CGPoint(x: parts[0], y: parts[1])
+                // As a drag does: arrive beside the place, move onto it, let go.
+                let start = CGPoint(x: point.x - 60, y: point.y - 40)
+                guard session.beginFileDrag(names: [url.lastPathComponent], at: start) else {
+                    print("automation: the Mac did not take the drag")
+                    continue
+                }
+                for step in 1...6 {
+                    try? await Task.sleep(for: .milliseconds(120))
+                    let t = Double(step) / 6
+                    session.moveFileDrag(to: CGPoint(
+                        x: start.x + (point.x - start.x) * t, y: start.y + (point.y - start.y) * t))
+                }
+                try? await Task.sleep(for: .milliseconds(500))
+                session.dropFiles([url], at: point)
+            case "drag":
+                let ends = argument.split(separator: ">").map {
+                    $0.split(separator: ",").compactMap { Double($0) }
+                }
+                guard ends.count == 2, ends[0].count == 2, ends[1].count == 2 else { continue }
+                let from = CGPoint(x: ends[0][0], y: ends[0][1])
+                let to = CGPoint(x: ends[1][0], y: ends[1][1])
+                session.pointer(buttons: [], at: from)
+                try? await Task.sleep(for: .milliseconds(250))
+                session.pointer(buttons: .left, at: from)
+                try? await Task.sleep(for: .milliseconds(350))
+                for step in 1...24 {
+                    let t = Double(step) / 24
+                    session.pointer(buttons: .left, at: CGPoint(
+                        x: from.x + (to.x - from.x) * t, y: from.y + (to.y - from.y) * t))
+                    try? await Task.sleep(for: .milliseconds(60))
+                }
+                try? await Task.sleep(for: .milliseconds(900))
+                session.pointer(buttons: [], at: to)
             case "clip":
                 // Straight to the remote clipboard, leaving this device's alone.
                 session.engine.sendClipboardText(argument)
@@ -454,6 +495,18 @@ enum DebugAutomation {
             ],
             "displayCount": session.engine.activeVideoDisplayCount,
             "displayFrames": session.arrangement.frames.map { [$0.minX, $0.minY, $0.width, $0.height] },
+            "canDropFiles": session.canDropFiles,
+            "canFetchFiles": session.canFetchFiles,
+            "fileTransfers": session.fileTransfers.transfers.map { transfer in
+                [
+                    "name": transfer.name,
+                    "direction": transfer.direction == .upload ? "upload" : "download",
+                    "state": String(describing: transfer.state),
+                    "bytes": [transfer.completedBytes, transfer.totalBytes],
+                    "remoteFolder": transfer.remoteFolder ?? "",
+                    "local": transfer.localURLs.map(\.path),
+                ] as [String: Any]
+            },
             "supportsCurtain": session.supportsCurtain,
             "isCurtained": session.isCurtained,
             "appleModifiers": session.engine.serverUsesAppleModifierConvention,
