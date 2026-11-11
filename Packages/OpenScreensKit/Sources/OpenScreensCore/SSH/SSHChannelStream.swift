@@ -144,6 +144,7 @@ final class SSHChannelStream: Sendable {
     static let readAheadLimit = 4 * 1024 * 1024
 
     let channel: any Channel
+    private let gate: NIOLoopBound<SSHKeyExchangeGate>
     private let connectionLog: SSHConnectionLog
     private let state = Mutex(State())
 
@@ -198,9 +199,32 @@ final class SSHChannelStream: Sendable {
         }
     }
 
-    init(channel: any Channel, connectionLog: SSHConnectionLog) {
+    init(
+        channel: any Channel,
+        gate: NIOLoopBound<SSHKeyExchangeGate>,
+        connectionLog: SSHConnectionLog
+    ) {
         self.channel = channel
+        self.gate = gate
         self.connectionLog = connectionLog
+    }
+
+    /// Does something that makes the channel send: on its event loop, in
+    /// the order asked, and not while the connection's keys are being
+    /// replaced (see ``SSHKeyExchangeGate``).
+    private func perform(_ operation: @escaping @Sendable () -> Void) {
+        let gate = self.gate
+        channel.eventLoop.execute {
+            gate.value.perform(operation)
+        }
+    }
+
+    /// Asks the channel for the next batch of received data.
+    private func startReading() {
+        let channel = self.channel
+        perform {
+            channel.read()
+        }
     }
 
     // MARK: Reading
@@ -250,7 +274,7 @@ final class SSHChannelStream: Sendable {
             switch step {
             case .taken(let taken, let resumeReading):
                 if resumeReading {
-                    channel.read()
+                    startReading()
                 }
                 return taken
             case .failed(let error):
@@ -283,7 +307,7 @@ final class SSHChannelStream: Sendable {
             case .resume:
                 continuation.resume()
             case .startReading:
-                channel.read()
+                startReading()
             case .wait:
                 break
             }
@@ -312,16 +336,22 @@ final class SSHChannelStream: Sendable {
                 continuation.resume(returning: endedReason ?? .closed)
                 return
             }
-            channel.writeAndFlush(Self.message(bytes)).whenComplete { result in
-                // Whoever takes the waiter out answers it: this, or the end
-                // of the stream if that came first.
-                guard let waiter = self.state.withLock({ $0.sendWaiters.removeValue(forKey: number) })
-                else { return }
-                switch result {
-                case .success:
-                    waiter.resume(returning: nil)
-                case .failure(let error):
-                    waiter.resume(returning: self.endedReason ?? self.failure(for: error))
+            let channel = self.channel
+            perform {
+                // A stream that ended while the bytes were waiting their turn
+                // has told the sender so already, and sends nothing more.
+                guard self.state.withLock({ $0.sendWaiters[number] != nil }) else { return }
+                channel.writeAndFlush(Self.message(bytes)).whenComplete { result in
+                    // Whoever takes the waiter out answers it: this, or the
+                    // end of the stream if that came first.
+                    guard let waiter = self.state.withLock({ $0.sendWaiters.removeValue(forKey: number) })
+                    else { return }
+                    switch result {
+                    case .success:
+                        waiter.resume(returning: nil)
+                    case .failure(let error):
+                        waiter.resume(returning: self.endedReason ?? self.failure(for: error))
+                    }
                 }
             }
         }
@@ -334,7 +364,11 @@ final class SSHChannelStream: Sendable {
     /// bound their own outstanding data, as SFTP's request pipeline does; a
     /// failure shows up as the end of the stream.
     func enqueue(_ bytes: ByteBuffer) {
-        channel.writeAndFlush(Self.message(bytes), promise: nil)
+        let channel = self.channel
+        perform {
+            guard self.endedReason == nil else { return }
+            channel.writeAndFlush(Self.message(bytes), promise: nil)
+        }
     }
 
     private static func message(_ bytes: ByteBuffer) -> SSHChannelData {
@@ -382,7 +416,10 @@ final class SSHChannelStream: Sendable {
         if wasOpen {
             // This only starts the close. The channel is gone for good when
             // the peer confirms, or when the SSH connection ends.
-            channel.close(promise: nil)
+            let channel = self.channel
+            perform {
+                channel.close(promise: nil)
+            }
         }
     }
 
@@ -450,14 +487,19 @@ final class SSHChannelStream: Sendable {
     /// Asks the server to run `name` on this channel and waits for its answer.
     func requestSubsystem(_ name: String, timeout: TimeAmount) async throws {
         let channel = self.channel
+        let gate = self.gate
         let answered: EventLoopFuture<Void> = channel.eventLoop.flatSubmit {
-            do {
-                let handler = try channel.pipeline.syncOperations.handler(
-                    type: SSHChannelStreamHandler.self)
-                return handler.requestSubsystem(name)
-            } catch {
-                return channel.eventLoop.makeFailedFuture(error)
+            let answered = channel.eventLoop.makePromise(of: Void.self)
+            gate.value.perform {
+                do {
+                    let handler = try channel.pipeline.syncOperations.handler(
+                        type: SSHChannelStreamHandler.self)
+                    handler.requestSubsystem(name).cascade(to: answered)
+                } catch {
+                    answered.fail(error)
+                }
             }
+            return answered.futureResult
         }
         do {
             try await answered.value(orTimeoutAfter: timeout) { _ in }

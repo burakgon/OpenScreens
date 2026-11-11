@@ -58,6 +58,12 @@ public typealias SSHHostKeyPolicy = @Sendable (SSHHostKeyChallenge) async -> Boo
 /// routing, VPN and proxy configuration on both iOS and macOS. TCP keepalive
 /// is on: a server that goes silent is noticed after about 80 seconds, and
 /// the probes keep NAT mappings alive while a session sits idle.
+///
+/// A server may replace the connection's encryption keys whenever it sees
+/// fit, typically after so much data or time (`RekeyLimit` in OpenSSH).
+/// Tunnels and file transfers carry on across that. The server has to prove
+/// its identity again each time, with the very host key that was accepted
+/// when the connection was made: any other key ends the connection.
 public final class SSHClient: Sendable {
     /// Event loops shared by all SSH connections. Each connection does its
     /// encryption on the loop it lands on, so a couple of loops keep two
@@ -75,6 +81,9 @@ public final class SSHClient: Sendable {
     public let username: String
 
     private let channel: any Channel
+    /// What channels go through to send anything, so that nothing is sent
+    /// while the connection's keys are being replaced.
+    private let gate: NIOLoopBound<SSHKeyExchangeGate>
     private let log: SSHConnectionLog
     /// Time allowed for each exchange with the server that should be quick:
     /// opening a channel, starting a subsystem.
@@ -85,6 +94,7 @@ public final class SSHClient: Sendable {
         port: Int,
         username: String,
         channel: any Channel,
+        gate: NIOLoopBound<SSHKeyExchangeGate>,
         log: SSHConnectionLog,
         timeout: TimeAmount
     ) {
@@ -92,6 +102,7 @@ public final class SSHClient: Sendable {
         self.port = port
         self.username = username
         self.channel = channel
+        self.gate = gate
         self.log = log
         self.timeout = timeout
     }
@@ -153,7 +164,7 @@ public final class SSHClient: Sendable {
 
         return try await withTaskCancellationHandler {
             do {
-                let (channel, authentication) = try await bootstrap(timeout: timeout)
+                let (channel, authentication, gate) = try await bootstrap(timeout: timeout)
                     .connect(host: host, port: port) { channel in
                         channel.eventLoop.makeCompletedFuture {
                             try attempt.adopt(channel)
@@ -162,21 +173,25 @@ public final class SSHClient: Sendable {
                                 attempt: attempt,
                                 log: log,
                                 eventLoop: channel.eventLoop)
+                            let gate = SSHKeyExchangeGate(timeout: timeout)
                             let ssh = NIOSSHHandler(
                                 role: .client(SSHClientConfiguration(
                                     userAuthDelegate: handshake,
-                                    serverAuthDelegate: handshake)),
+                                    serverAuthDelegate: handshake,
+                                    transportProtectionSchemes: SSHKeyExchangeGate.transportProtectionSchemes)),
                                 allocator: channel.allocator,
                                 inboundChildChannelInitializer: nil)
-                            try channel.pipeline.syncOperations.addHandlers([ssh, handshake])
-                            return (channel, handshake.authentication)
+                            try channel.pipeline.syncOperations.addHandlers([gate, ssh, handshake])
+                            return (
+                                channel, handshake.authentication,
+                                NIOLoopBound(gate, eventLoop: channel.eventLoop))
                         }
                     }
                 try await authentication.get()
                 try Task.checkCancellation()
                 return SSHClient(
                     host: host, port: port, username: username,
-                    channel: channel, log: log, timeout: timeout)
+                    channel: channel, gate: gate, log: log, timeout: timeout)
             } catch {
                 attempt.abandon()
                 throw attempt.outcome(for: error)
@@ -274,27 +289,32 @@ public final class SSHClient: Sendable {
 
     private func openChannel(_ type: SSHChannelType) async throws -> SSHChannelStream {
         let channel = self.channel
+        let gate = self.gate
         let log = self.log
         let opened: EventLoopFuture<SSHChannelStream> = channel.eventLoop.flatSubmit {
-            do {
-                let ssh = try channel.pipeline.syncOperations.handler(type: NIOSSHHandler.self)
-                let activated = channel.eventLoop.makePromise(of: (any Channel).self)
-                ssh.createChannel(activated, channelType: type) { child, _ in
-                    // A child channel starts out reading whenever its parent
-                    // does. The stream pulls instead, which is what lets a
-                    // slow consumer hold the server back.
-                    child.setOption(ChannelOptions.autoRead, value: false).flatMapThrowing {
-                        let stream = SSHChannelStream(channel: child, connectionLog: log)
-                        try child.pipeline.syncOperations.addHandler(
-                            SSHChannelStreamHandler(stream: stream))
+            let activated = channel.eventLoop.makePromise(of: (any Channel).self)
+            // Asking for a channel is a message to the server like any other.
+            gate.value.perform {
+                do {
+                    let ssh = try channel.pipeline.syncOperations.handler(type: NIOSSHHandler.self)
+                    ssh.createChannel(activated, channelType: type) { child, _ in
+                        // A child channel starts out reading whenever its
+                        // parent does. The stream pulls instead, which is
+                        // what lets a slow consumer hold the server back.
+                        child.setOption(ChannelOptions.autoRead, value: false).flatMapThrowing {
+                            let stream = SSHChannelStream(
+                                channel: child, gate: gate, connectionLog: log)
+                            try child.pipeline.syncOperations.addHandler(
+                                SSHChannelStreamHandler(stream: stream))
+                        }
                     }
+                } catch {
+                    activated.fail(error)
                 }
-                return activated.futureResult.flatMapThrowing { child in
-                    try child.pipeline.syncOperations.handler(
-                        type: SSHChannelStreamHandler.self).stream
-                }
-            } catch {
-                return channel.eventLoop.makeFailedFuture(error)
+            }
+            return activated.futureResult.flatMapThrowing { child in
+                try child.pipeline.syncOperations.handler(
+                    type: SSHChannelStreamHandler.self).stream
             }
         }
         do {
