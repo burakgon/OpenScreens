@@ -3,6 +3,20 @@
 Notable changes to OpenScreens. Versions follow
 [Semantic Versioning](https://semver.org).
 
+## 1.1.1
+
+- **Opening a session no longer freezes the app.** Version 1.1.0 showed the
+  status bar wherever a screen had room for it, and what a screen keeps
+  clear depends on whether the bar is showing. On an iPhone Duo with iOS
+  27.3 the two did not agree: each change undid the other, the interface
+  never came to rest, and the system ended the app. The status bar is
+  hidden for as long as a session is on the screen, as it was in 1.0, and
+  nothing about the layout depends on anything the layout changes.
+- Two layouts that keep replacing each other are noticed and stopped,
+  whatever sets them off.
+- A foldable held at the very angle where the trackpad deck comes out no
+  longer has it come and go.
+
 ## 1.1.0
 
 A release for iPhone and iPad, after the first use on real devices.
