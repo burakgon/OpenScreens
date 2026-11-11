@@ -13,8 +13,6 @@ struct FileTransferOverlay: View {
     /// Transfers the user has dismissed, or that finished well long enough
     /// ago to go away by themselves.
     @State private var hidden: Set<UUID> = []
-    /// Where the files of a finished download were put.
-    @State private var kept: [UUID: [URL]] = [:]
 
     private static let space = "file-transfer-canvas"
 
@@ -42,7 +40,7 @@ struct FileTransferOverlay: View {
             if !rows.isEmpty {
                 FileTransferList(
                     rows: rows,
-                    kept: kept,
+                    kept: session.fetchedFiles,
                     onCancel: { transfers.cancel($0.id) },
                     onDismiss: dismiss)
                     #if os(macOS)
@@ -102,8 +100,7 @@ struct FileTransferOverlay: View {
         for transfer in transfers where transfer.state == .completed {
             switch transfer.direction {
             case .download:
-                guard kept[transfer.id] == nil, !transfer.localURLs.isEmpty else { continue }
-                kept[transfer.id] = session.keepFetchedFiles(of: transfer)
+                session.keepFetchedFiles(of: transfer)
             case .upload:
                 guard !hidden.contains(transfer.id) else { continue }
                 let id = transfer.id
@@ -116,12 +113,14 @@ struct FileTransferOverlay: View {
         }
         let present = Set(transfers.map(\.id))
         hidden.formIntersection(present)
-        kept = kept.filter { present.contains($0.key) }
+        for id in session.fetchedFiles.keys where !present.contains(id) {
+            session.forgetFetchedFiles(of: id)
+        }
     }
 
     private func dismiss(_ transfer: VNCFileTransfer) {
         hidden.insert(transfer.id)
-        if transfer.direction == .download, kept[transfer.id] != nil {
+        if transfer.direction == .download, session.fetchedFiles[transfer.id] != nil {
             // The files have been moved to where the user will find them;
             // what is left is the empty folder they arrived in.
             session.fileTransfers.downloadWasSaved(transfer.id)

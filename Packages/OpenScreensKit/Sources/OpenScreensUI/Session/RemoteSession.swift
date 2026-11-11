@@ -1131,25 +1131,39 @@ public final class RemoteSession: Identifiable {
         engine.fileTransfers.dragOutTarget = remote.offsetBy(dx: remoteOrigin.x, dy: remoteOrigin.y)
     }
 
-    /// Where files copied back from a Mac are put: the Downloads folder on a
-    /// Mac. On iPhone and iPad they wait until the user says where to.
+    /// Where the files of finished downloads were put, by transfer.
+    public private(set) var fetchedFiles: [UUID: [URL]] = [:]
+
+    /// Puts files copied back from a Mac where the user will look for them:
+    /// the Downloads folder on a Mac. On iPhone and iPad they wait where
+    /// they arrived until the user says where to.
+    ///
+    /// Done once for a transfer; asking again gives the same places.
+    @discardableResult
     public func keepFetchedFiles(of transfer: VNCFileTransfer) -> [URL] {
+        if let kept = fetchedFiles[transfer.id] { return kept }
+        guard transfer.direction == .download, !transfer.localURLs.isEmpty else { return [] }
+        var kept = transfer.localURLs
         #if os(macOS)
-        guard let downloads = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first else {
-            return transfer.localURLs
-        }
-        return transfer.localURLs.map { source in
-            let destination = FileBrowser.unusedURL(for: source.lastPathComponent, in: downloads)
-            do {
-                try FileManager.default.moveItem(at: source, to: destination)
-                return destination
-            } catch {
-                return source
+        if let downloads = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first {
+            kept = transfer.localURLs.map { source in
+                let destination = FileBrowser.unusedURL(for: source.lastPathComponent, in: downloads)
+                do {
+                    try FileManager.default.moveItem(at: source, to: destination)
+                    return destination
+                } catch {
+                    return source
+                }
             }
         }
-        #else
-        return transfer.localURLs
         #endif
+        fetchedFiles[transfer.id] = kept
+        return kept
+    }
+
+    /// Forgets where a transfer's files went, once it is off the list.
+    public func forgetFetchedFiles(of id: UUID) {
+        fetchedFiles[id] = nil
     }
 
     // MARK: - Engine configuration
