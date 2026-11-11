@@ -115,7 +115,7 @@ public final class LibraryStore {
         copy.createdAt = now
         // Outrank the deletion of an earlier computer with the same identity.
         copy.modifiedAt = Self.stamp(after: tombstones[copy.id.uuidString], now: now)
-        copy.sortIndex = Computer.clampedSortIndex((computers.map(\.sortIndex).max() ?? -1) + 1)
+        copy.sortIndex = Computer.sortIndex(after: computers.map(\.sortIndex))
         tombstones[copy.id.uuidString] = nil
         computers.append(copy)
         didChange()
@@ -127,8 +127,9 @@ public final class LibraryStore {
             add(computer)
             return
         }
-        guard computers[index] != computer else { return }
         var copy = computer
+        copy.sortIndex = Computer.clampedSortIndex(copy.sortIndex)
+        guard computers[index] != copy else { return }
         copy.modifiedAt = Self.stamp(after: computers[index].modifiedAt)
         computers[index] = copy
         didChange()
@@ -246,16 +247,17 @@ public final class LibraryStore {
         let group = ComputerGroup(
             name: name,
             symbolName: symbolName,
-            sortIndex: Computer.clampedSortIndex((groups.map(\.sortIndex).max() ?? -1) + 1))
+            sortIndex: Computer.sortIndex(after: groups.map(\.sortIndex)))
         groups.append(group)
         didChange()
         return group
     }
 
     public func update(_ group: ComputerGroup) {
-        guard let index = groups.firstIndex(where: { $0.id == group.id }),
-              groups[index] != group else { return }
         var copy = group
+        copy.sortIndex = Computer.clampedSortIndex(copy.sortIndex)
+        guard let index = groups.firstIndex(where: { $0.id == group.id }),
+              groups[index] != copy else { return }
         copy.modifiedAt = Self.stamp(after: groups[index].modifiedAt)
         groups[index] = copy
         didChange()

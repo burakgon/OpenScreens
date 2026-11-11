@@ -128,6 +128,13 @@ public struct Computer: Identifiable, Codable, Hashable, Sendable {
     static func clampedSortIndex(_ value: Int) -> Int {
         min(max(value, -1_000_000_000), 1_000_000_000)
     }
+
+    /// The position after the last of `positions`, or the first when there
+    /// are none. Each is clamped before it is counted from, so a position
+    /// that was set by hand to the largest integer cannot overflow the sum.
+    static func sortIndex(after positions: some Sequence<Int>) -> Int {
+        clampedSortIndex(clampedSortIndex(positions.max() ?? -1) + 1)
+    }
 }
 
 extension KeyedDecodingContainer {

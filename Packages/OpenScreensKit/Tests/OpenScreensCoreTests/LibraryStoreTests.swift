@@ -67,6 +67,39 @@ struct LibraryStoreTests {
         #expect(names(in: store) == ["Synced", "New"])
     }
 
+    /// A position can arrive as large as an integer gets: built in memory,
+    /// it never passes through the decoder that would have bounded it. The
+    /// next computer must still find a place, not crash counting past it.
+    @Test func aNewComputerFindsAPlaceAfterTheLargestPositionThereIs() {
+        let store = makeStore()
+        store.merge(LibraryDocument(
+            computers: [LibraryFixtures.computer("Far", modifiedAt: .now, sortIndex: .max)],
+            groups: [ComputerGroup(name: "Far group", sortIndex: .max)]))
+
+        let added = store.add(Computer(name: "New", host: "new.local"))
+        #expect(added.sortIndex <= 1_000_000_000)
+        #expect(store.computers.contains { $0.id == added.id })
+        let group = store.addGroup(named: "New group")
+        #expect(group.sortIndex <= 1_000_000_000)
+    }
+
+    @Test func aPositionSetThroughAnUpdateIsBounded() throws {
+        let store = makeStore()
+        var computer = store.add(Computer(name: "One", host: "one.local"))
+        computer.sortIndex = .max
+        store.update(computer)
+        #expect(try #require(store.computer(computer.id)).sortIndex == 1_000_000_000)
+
+        computer.sortIndex = .min
+        store.update(computer)
+        #expect(try #require(store.computer(computer.id)).sortIndex == -1_000_000_000)
+
+        var group = store.addGroup(named: "Group")
+        group.sortIndex = .max
+        store.update(group)
+        #expect(store.groups.first { $0.id == group.id }?.sortIndex == 1_000_000_000)
+    }
+
     @Test func updatingReplacesTheComputerAndStampsIt() throws {
         let store = makeStore()
         let original = store.add(Computer(name: "Studio", host: "studio.local"))
