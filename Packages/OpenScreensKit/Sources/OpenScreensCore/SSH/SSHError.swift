@@ -92,10 +92,27 @@ extension SSHError {
             // The structural form is kept next to the localized text because
             // the two carry different information, and for an error nobody
             // anticipated either may be the one that explains it.
-            let structural = String(describing: error)
+            let structural = structuralDescription(of: error)
             let localized = error.localizedDescription
             return structural == localized ? structural : "\(structural) (\(localized))"
         }
+    }
+
+    /// An error as it prints, less what must not be shown.
+    ///
+    /// swift-nio-ssh words a protocol violation by printing the message that
+    /// was out of place, contents and all. The contents of a message can be
+    /// a piece of a file in transit, what the user is typing, or the password
+    /// in a sign-in request, and an error's description ends up on screen
+    /// and wherever errors are written down. The name of the message is the
+    /// part that explains anything; the text is cut where its contents begin.
+    private static func structuralDescription(of error: any Error) -> String {
+        let description = String(describing: error)
+        guard let error = error as? NIOSSHError, error.type == .protocolViolation,
+              let contents = description.firstIndex(of: "(") else {
+            return description
+        }
+        return String(description[..<contents])
     }
 
     /// Says what a Network.framework error means for a connection, in words,
