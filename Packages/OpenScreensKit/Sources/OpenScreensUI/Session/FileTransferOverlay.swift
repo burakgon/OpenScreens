@@ -17,7 +17,7 @@ struct FileTransferOverlay: View {
     /// once however many times the list changes meanwhile.
     @State private var leaving: Set<UUID> = []
 
-    private static let space = "file-transfer-canvas"
+    private nonisolated static let space = "file-transfer-canvas"
 
     var body: some View {
         let transfers = session.fileTransfers
