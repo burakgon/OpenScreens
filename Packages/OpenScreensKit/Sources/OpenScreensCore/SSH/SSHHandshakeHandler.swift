@@ -116,6 +116,8 @@ final class SSHHandshakeHandler: ChannelInboundHandler {
     private var context: ChannelHandlerContext?
     private var hasOfferedCredential = false
     private var hostKeyDecision: Task<Void, Never>?
+    /// The host key the policy accepted while the connection was being made.
+    private var acceptedHostKey: NIOSSHPublicKey?
 
     private var timer: Scheduled<Void>?
     private var timerStartedAt: NIODeadline?
@@ -266,6 +268,30 @@ extension SSHHandshakeHandler: NIOSSHClientServerAuthenticationDelegate {
             return
         }
 
+        switch phase {
+        case .handshaking:
+            break
+        case .established:
+            // The server is replacing the session's encryption keys, which
+            // it does after so much data or time (`RekeyLimit` in OpenSSH),
+            // and proves its identity again as part of that. The answer is
+            // already known: the key accepted for this connection, and no
+            // other. A person was asked once; a different key now is not a
+            // new question for them but a connection that changed hands.
+            // Nothing is looked up and nobody is asked, so the answer is
+            // given on the spot, and no clock runs: the connection's
+            // channels are waiting for this exchange to be over.
+            if hostKey == acceptedHostKey {
+                validationCompletePromise.succeed(())
+            } else {
+                validationCompletePromise.fail(SSHError.hostKeyRejected(fingerprint: key.fingerprint))
+            }
+            return
+        case .connecting, .failed:
+            validationCompletePromise.fail(SSHError.closed)
+            return
+        }
+
         // The policy may put the question to a person. Their thinking time is
         // not the server being slow, so the handshake clock stops meanwhile.
         stopTimer()
@@ -290,6 +316,7 @@ extension SSHHandshakeHandler: NIOSSHClientServerAuthenticationDelegate {
             }
             self.startTimer()
             if isAccepted {
+                self.acceptedHostKey = hostKey
                 validationCompletePromise.succeed(())
             } else {
                 validationCompletePromise.fail(SSHError.hostKeyRejected(fingerprint: key.fingerprint))

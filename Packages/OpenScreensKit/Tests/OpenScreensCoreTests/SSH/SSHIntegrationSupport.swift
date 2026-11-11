@@ -45,12 +45,19 @@ struct PrivateSSHServer: Sendable {
     /// cancelled, which reports it as skipped rather than failed.
     ///
     /// - Parameters:
+    ///   - rekeyLimit: The server's `RekeyLimit`: how much data it lets
+    ///     through, and optionally how much time, before it replaces a
+    ///     session's encryption keys, as in `"1M"` or `"default 2s"`. With a
+    ///     limit set the server also logs each replacement, which
+    ///     `completedKeyExchangeCount()` counts. `nil` leaves the server's
+    ///     own limits, which no test comes near.
     ///   - hostKeyType: The `ssh-keygen -t` name of the kind of host key the
     ///     server should have. It has that key and no other.
     ///   - offersSFTP: Whether the server provides the `sftp` subsystem.
     ///   - allowsForwarding: Whether the server makes connections on behalf
     ///     of its clients, which is what a tunnel is.
     static func run<Result>(
+        rekeyLimit: String? = nil,
         hostKeyType: String = "ed25519",
         offersSFTP: Bool = true,
         allowsForwarding: Bool = true,
@@ -60,6 +67,7 @@ struct PrivateSSHServer: Sendable {
         let server: PrivateSSHServer
         do {
             server = try await start(
+                rekeyLimit: rekeyLimit,
                 in: scratch, hostKeyType: hostKeyType,
                 offersSFTP: offersSFTP, allowsForwarding: allowsForwarding)
         } catch {
@@ -70,6 +78,7 @@ struct PrivateSSHServer: Sendable {
     }
 
     private static func start(
+        rekeyLimit: String?,
         in scratch: TemporaryDirectory,
         hostKeyType: String,
         offersSFTP: Bool,
@@ -120,8 +129,12 @@ struct PrivateSSHServer: Sendable {
             // Older servers do not know the option, so it is dropped if it is
             // refused.
             let optional = ["PerSourcePenalties no"]
+            // These go ahead of the rest, because sshd keeps the first value
+            // it meets for an option: only at this log level does the server
+            // say when it replaces keys.
+            let renewal = rekeyLimit.map { ["RekeyLimit \($0)", "LogLevel DEBUG1"] } ?? []
             func write(_ lines: [String]) throws {
-                try Data((lines.joined(separator: "\n") + "\n").utf8).write(to: configurationFile)
+                try Data(((renewal + lines).joined(separator: "\n") + "\n").utf8).write(to: configurationFile)
             }
             try write(required + optional)
             if (try? CommandLineTool.run(executable, ["-t", "-f", configurationFile.path])) == nil {
