@@ -26,7 +26,9 @@ VNC.
 
 - **High Performance mode** for Apple silicon Macs: HEVC video at up to 60
   frames a second, the remote Mac's sound, and a desktop created at the size
-  of your window or screen — a phone held upright gets an upright desktop.
+  of your window or screen. A phone held upright gets an upright desktop
+  made for a phone, with text large enough to read and no more pixels than
+  it can show; ask for more space when you want the room instead.
 - **One display, all of them side by side, or two virtual displays** of your
   own, which share the window: beside each other when it is wide, one above
   the other on a phone held upright.
@@ -47,6 +49,11 @@ VNC.
   a trackpad. Two-finger scrolling with momentum, pinch to zoom, right-click
   and drag gestures, a key bar for modifiers, arrows and function keys, and
   full support for hardware keyboards, trackpads, mice and Apple Pencil.
+- The picture has the screen to itself. The controls stand beside it where
+  the screen has a strip to spare — the cover display of an iPhone Duo, any
+  iPhone on its side — and elsewhere go away to a small handle the moment
+  you touch the remote screen. A keyboard slides the picture up instead of
+  shrinking it.
 - Shortcuts in one tap — Mission Control, Spotlight, Control-Alt-Delete — and
   your own. Type Text sends a whole paragraph as keystrokes.
 

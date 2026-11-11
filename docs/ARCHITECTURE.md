@@ -42,7 +42,7 @@ what makes it testable:
 | `Discovery`, `Tailscale` | Finding computers: Bonjour through dns_sd, and the tailnet through Tailscale's API or local app. |
 | `SSH` | Client, tunnel, SFTP, private keys, known hosts. Built on SwiftNIO SSH. |
 | `Input` | Keysyms, key codes, and `HardwareKeyboard`, which decides what a key press means to the remote computer. |
-| `Geometry` | `Viewport`: fit, fill, zoom, pan, and mapping a point in the view to a point of the picture. `DisplayArrangement`: where two displays go in the picture, and which remote pixel a point of it stands for. |
+| `Geometry` | `Viewport`: fit, fill, zoom, pan, and mapping a point in the view to a point of the picture. `DisplayArrangement`: where two displays go in the picture, and which remote pixel a point of it stands for. `SessionChromeLayout`: where the picture and the controls go on a touch screen, from what the screen keeps content clear of. |
 | `Network` | Address parsing, links, Wake-on-LAN. |
 
 **OpenScreensUI** is the app:
@@ -75,7 +75,11 @@ what makes it testable:
    then makes its connection through that instead of dialling itself.
 3. The canvas reports its size, and for a desktop that follows the window the
    engine asks the Mac for a virtual display of that size — or two, each half
-   of it.
+   of it. A view smaller than a Mac's screen gets a desktop of its shape,
+   scaled up to a minimum the computer's settings choose: 720 points across
+   by default, 1024 for more space. A Mac does not say when it will not make
+   a display that small, so once the resize has settled the session checks
+   what it was given.
 4. Pointer events are mapped through `Viewport` to the picture and through
    `DisplayArrangement` to remote pixels. Key events go through
    `HardwareKeyboard`.
