@@ -775,6 +775,9 @@ public final class VNCSession {
     /// The latest rendered framebuffer image, suitable for display.
     public var currentImage: CGImage?
 
+    /// Drag-and-drop file transfer with a Mac.
+    public let fileTransfers = VNCFileTransferController()
+
     /// The last protocol error that occurred, if any.
     public var lastError: VNCProtocolError?
 
@@ -1257,6 +1260,7 @@ public final class VNCSession {
     /// - Parameter configuration: Session configuration. Defaults to sensible values.
     public init(configuration: VNCConfiguration = VNCConfiguration()) {
         self.configuration = configuration
+        fileTransfers.session = self
         videoBandRenderer.onFrameCommitted = {
             [weak self] pixelBuffer, streamGeneration in
             self?.noteCommittedFrameGenerationForLoginQuietClock(
@@ -1584,7 +1588,7 @@ public final class VNCSession {
                 enqueueInput(event)
             case .pointer(let buttonMask, let x, let y):
                 sendPointerEvent(buttonMask: buttonMask, x: x, y: y)
-            case .scroll, .gesture, .clipboard, .clipboardRequest,
+            case .scroll, .gesture, .clipboard, .fileTransfer, .clipboardRequest,
                  .sharedClipboard, .curtain, .keyboardInputSource:
                 assertionFailure("Unexpected event in login password sequence")
             }
@@ -1694,6 +1698,7 @@ public final class VNCSession {
     ///   - y: The Y coordinate in framebuffer pixels.
     public func sendPointerEvent(buttonMask: UInt8, x: UInt16, y: UInt16) {
         guard connectionState.isConnected, transportSession != nil else { return }
+        fileTransfers.observePointer(buttonMask: buttonMask, x: x, y: y)
 
         if isTraceEnabled {
             diagnostics.protocolTrace.recordSent(
@@ -2067,6 +2072,9 @@ public final class VNCSession {
         case .serverInit(let serverInit):
             await refreshClipboardCapabilities(from: transport)
             await refreshHandshakeDiagnostics(from: transport)
+            fileTransfers.updateSupport(
+                upload: await transport.supportsAppleFileUpload,
+                download: await transport.supportsAppleFileDownload)
             await handleServerInit(serverInit)
 
         case .framebufferUpdate(let rects):
@@ -2182,6 +2190,18 @@ public final class VNCSession {
 
         case .appleMediaControlRecord:
             break
+
+        case .appleUploadRequest(let request):
+            fileTransfers.handle(request)
+
+        case .appleDragOutReply(let reply):
+            fileTransfers.handle(reply)
+
+        case .appleFileCopy(let message):
+            fileTransfers.handle(message) { [weak transport] bytes in
+                guard bytes > 0 else { return }
+                Task { await transport?.acknowledgeFileTransferBytes(bytes) }
+            }
 
         case .disconnected:
             handleDisconnected()
@@ -2933,6 +2953,7 @@ public final class VNCSession {
         remoteDisplayResizeTask = nil
         lastRequestedClientDisplaySize = nil
         invalidateInputQueue()
+        fileTransfers.transportDidEnd()
         transportSession = nil
         invalidateStandardFramebufferPresentation()
         if clearCredentials {
@@ -4026,6 +4047,13 @@ public final class VNCSession {
         }
     }
 
+    /// Sends a file-transfer message in order with queued pointer input.
+    func enqueueFileTransferControl(_ message: Data) {
+        enqueueInput(.fileTransfer(message))
+    }
+
+    var activeTransport: TransportSession? { transportSession }
+
     /// Append input to one ordered, bounded pump. Redundant pointer positions
     /// and queued continuous-scroll samples are coalesced while button/key and
     /// gesture lifecycle transitions remain exact.
@@ -4074,6 +4102,14 @@ public final class VNCSession {
                     } catch {
                         self.logger.warning(
                             "Failed to send clipboard: "
+                                + error.localizedDescription)
+                    }
+                case .fileTransfer(let message):
+                    do {
+                        try await transport.sendAppleFileTransferMessage(message)
+                    } catch {
+                        self.logger.warning(
+                            "Failed to send file transfer message: "
                                 + error.localizedDescription)
                     }
                 case .clipboardRequest:
@@ -4204,7 +4240,7 @@ public final class VNCSession {
             return .physicalKey(downFlag: downFlag, key: keysym, keyCode: keyCode)
         case .pointer(let buttonMask, let x, let y):
             return .pointer(buttonMask: buttonMask, x: x, y: y)
-        case .pause, .scroll, .gesture, .clipboard, .clipboardRequest,
+        case .pause, .scroll, .gesture, .clipboard, .fileTransfer, .clipboardRequest,
              .sharedClipboard, .curtain, .keyboardInputSource:
             return nil
         }
