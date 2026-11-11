@@ -44,6 +44,13 @@ struct ConnectionSettingsForm: View {
                 }
                 .disabled(!isHighPerformance)
 
+                if isHighPerformance, settings.resolution == .matchWindow {
+                    Toggle(isOn: $settings.moreSpace) {
+                        Text("More Space on Small Screens")
+                        Text("A desktop wide enough for every Mac window, even on a phone. Text is smaller and the picture takes more to send.")
+                    }
+                }
+
                 Picker("Displays", selection: $settings.displays) {
                     ForEach(DisplayLayout.allCases) { layout in
                         if layout != .twoVirtual || isHighPerformance {

@@ -71,6 +71,12 @@ struct DisplayMenuItems: View {
                     }
                 }
                 .pickerStyle(.inline)
+
+                if session.settings.resolution == .matchWindow {
+                    Toggle("More Space", systemImage: "arrow.up.left.and.arrow.down.right", isOn: Binding(
+                        get: { session.settings.moreSpace },
+                        set: { on in session.update { $0.moreSpace = on } }))
+                }
             }
         }
     }

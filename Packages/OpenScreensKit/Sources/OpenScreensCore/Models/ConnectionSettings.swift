@@ -11,6 +11,10 @@ public struct ConnectionSettings: Codable, Hashable, Sendable {
 
     public var quality: QualityMode
     public var resolution: ResolutionMode
+    /// On a screen smaller than a Mac's, ask for a desktop with room for any
+    /// Mac window rather than one sized for the screen. See
+    /// ``minimumDesktopSize``.
+    public var moreSpace: Bool
     public var displays: DisplayLayout
     public var scaling: ScalingMode
     public var colorDepth: ColorDepth
@@ -61,6 +65,7 @@ public struct ConnectionSettings: Codable, Hashable, Sendable {
     public init(
         quality: QualityMode = .highPerformance,
         resolution: ResolutionMode = .matchWindow,
+        moreSpace: Bool = false,
         displays: DisplayLayout = .single,
         scaling: ScalingMode = .fit,
         colorDepth: ColorDepth = .full,
@@ -87,6 +92,7 @@ public struct ConnectionSettings: Codable, Hashable, Sendable {
     ) {
         self.quality = quality
         self.resolution = resolution
+        self.moreSpace = moreSpace
         self.displays = displays
         self.scaling = scaling
         self.colorDepth = colorDepth
@@ -117,6 +123,7 @@ public struct ConnectionSettings: Codable, Hashable, Sendable {
         let d = ConnectionSettings()
         quality = try c.decodeIfPresent(QualityMode.self, forKey: .quality) ?? d.quality
         resolution = try c.decodeIfPresent(ResolutionMode.self, forKey: .resolution) ?? d.resolution
+        moreSpace = try c.decodeIfPresent(Bool.self, forKey: .moreSpace) ?? d.moreSpace
         displays = try c.decodeIfPresent(DisplayLayout.self, forKey: .displays) ?? d.displays
         scaling = try c.decodeIfPresent(ScalingMode.self, forKey: .scaling) ?? d.scaling
         colorDepth = try c.decodeIfPresent(ColorDepth.self, forKey: .colorDepth) ?? d.colorDepth
@@ -149,6 +156,19 @@ public struct ConnectionSettings: Codable, Hashable, Sendable {
         offerPasswordAtLoginWindow = try c.decodeIfPresent(Bool.self, forKey: .offerPasswordAtLoginWindow) ?? d.offerPasswordAtLoginWindow
         reconnectAutomatically = try c.decodeIfPresent(Bool.self, forKey: .reconnectAutomatically) ?? d.reconnectAutomatically
         fallBackToStandard = try c.decodeIfPresent(Bool.self, forKey: .fallBackToStandard) ?? d.fallBackToStandard
+    }
+
+    /// The smallest desktop, in points, to ask a Mac for when the desktop
+    /// follows this display. A smaller view gets a desktop of its own shape
+    /// scaled up to this.
+    ///
+    /// A phone is some 400 points wide. A desktop of that width is no use,
+    /// and one of 1024, wide enough for every Mac window, is shown at well
+    /// under half size and is eight megapixels to send for a phone held
+    /// upright. The middle way is the default: 720 points, the width of the
+    /// widest window that cannot be made narrower, System Settings.
+    public var minimumDesktopSize: CGSize {
+        moreSpace ? CGSize(width: 1024, height: 600) : CGSize(width: 720, height: 600)
     }
 
     /// Sensible starting settings for a kind of computer. Only Macs can use

@@ -126,6 +126,13 @@ public final class RemoteSession: Identifiable {
     /// the shape of the view, and so what size was asked for each.
     private var displayAxis: DisplayArrangement.Axis = .sideBySide
     @ObservationIgnored private var lastDisplayScale: CGFloat = 2
+    /// Checks, a while after a desktop size was asked for, that the Mac made
+    /// a desktop of that size.
+    @ObservationIgnored private var desktopSizeCheck: Task<Void, Never>?
+    /// Macs that answered a desktop sized for a small screen with one of
+    /// their own choosing. For as long as the app runs they are asked for
+    /// the size every Mac gives.
+    @ObservationIgnored private static var refusesSmallDesktops: Set<Computer.ID> = []
     @ObservationIgnored private var didRunConnectActions = false
     @ObservationIgnored private var lastStatisticsSample: (pictures: [[UInt32: UInt64]], updates: UInt64, date: Date)?
     @ObservationIgnored private lazy var pointerHandler = TouchInputHandler(
@@ -169,6 +176,7 @@ public final class RemoteSession: Identifiable {
         connectTask?.cancel()
         observationTask?.cancel()
         statisticsTask?.cancel()
+        desktopSizeCheck?.cancel()
     }
 
     // MARK: - State
@@ -735,6 +743,10 @@ public final class RemoteSession: Identifiable {
         } else {
             engine.configuration.promptForLoginPasswordAtLoginWindow =
                 newSettings.offerPasswordAtLoginWindow
+            if newSettings.moreSpace != old.moreSpace {
+                // The same connection, with a desktop of another size.
+                requestDisplaySize()
+            }
         }
     }
 
@@ -761,6 +773,15 @@ public final class RemoteSession: Identifiable {
         requestDisplaySize()
     }
 
+    /// The size every Mac makes a desktop of, however small the view.
+    private static let roomyDesktopSize = ConnectionSettings(moreSpace: true).minimumDesktopSize
+
+    /// The smallest desktop to ask a Mac for: what its settings say, unless
+    /// it has turned a desktop of that size down before.
+    private static func minimumDesktopSize(for computer: Computer) -> CGSize {
+        refusesSmallDesktops.contains(computer.id) ? roomyDesktopSize : computer.settings.minimumDesktopSize
+    }
+
     /// Asks for displays that fit the view, once its size is known.
     private func requestDisplaySize() {
         guard lastViewSize.width > 1, lastViewSize.height > 1 else { return }
@@ -768,9 +789,61 @@ public final class RemoteSession: Identifiable {
         if displayAxis != axis {
             displayAxis = axis
         }
-        engine.updateRemoteDisplaySize(
-            viewSize: settings.displays.room(forOneDisplayIn: lastViewSize),
-            displayScale: lastDisplayScale)
+        let minimum = Self.minimumDesktopSize(for: computer)
+        if engine.configuration.matchClientMinimumPointSize != minimum {
+            engine.configuration.matchClientMinimumPointSize = minimum
+        }
+        let room = settings.displays.room(forOneDisplayIn: lastViewSize)
+        engine.updateRemoteDisplaySize(viewSize: room, displayScale: lastDisplayScale)
+        checkDesktopSize(for: room, minimum: minimum)
+    }
+
+    /// Finds out whether the Mac made the desktop it was asked for.
+    ///
+    /// A Mac that will not make a display as small as it is asked for does
+    /// not say so: it makes one of its own choosing, of another shape, which
+    /// is then shown with bars beside it. macOS 27 makes them down to about
+    /// 540 points a side, and what earlier versions do is not known. So a
+    /// desktop smaller than the size every Mac gives is checked on, and a
+    /// Mac that did not make it is asked for that size instead.
+    private func checkDesktopSize(for room: CGSize, minimum: CGSize) {
+        desktopSizeCheck?.cancel()
+        desktopSizeCheck = nil
+        guard minimum != Self.roomyDesktopSize, settings.displays == .single,
+              settings.resolution == .matchWindow,
+              let expected = VNCSession.matchedDisplayPixelSize(viewSize: room, minimumPointSize: minimum),
+              expected != VNCSession.matchedDisplayPixelSize(
+                viewSize: room, minimumPointSize: Self.roomyDesktopSize)
+        else { return }
+        desktopSizeCheck = Task { [weak self] in
+            // The Mac has answered once it has made its displays over and
+            // the picture has stayed one size for a while. A connection
+            // that never gets that far is not waited on for ever.
+            var settledFor = 0
+            var wasRefused = false
+            for _ in 0..<240 {
+                try? await Task.sleep(for: .milliseconds(500))
+                guard let self, !Task.isCancelled else { return }
+                guard self.isConnected, self.engine.isHighPerformanceMode,
+                      self.engine.isRemoteDisplayResizeSettled else {
+                    settledFor = 0
+                    continue
+                }
+                let made = CGSize(
+                    width: self.engine.framebufferWidth, height: self.engine.framebufferHeight)
+                if made == expected { return }
+                settledFor += 1
+                if settledFor >= 12 {
+                    wasRefused = true
+                    break
+                }
+            }
+            guard wasRefused, let self, !Task.isCancelled, self.isConnected,
+                  self.engine.isHighPerformanceMode,
+                  self.engine.configuration.displaySizingMode == .matchClient else { return }
+            Self.refusesSmallDesktops.insert(self.computer.id)
+            self.requestDisplaySize()
+        }
     }
 
     // MARK: - Pointer
@@ -1258,6 +1331,7 @@ public final class RemoteSession: Identifiable {
             reconnectionPolicy: VNCReconnectionPolicy(isEnabled: settings.reconnectAutomatically))
         // What the remote Mac lists the displays it creates as.
         configuration.virtualDisplayName = "OpenScreens Display"
+        configuration.matchClientMinimumPointSize = minimumDesktopSize(for: computer)
         return configuration
     }
 

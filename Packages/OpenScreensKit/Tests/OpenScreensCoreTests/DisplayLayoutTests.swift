@@ -50,3 +50,30 @@ struct DisplayLayoutTests {
         #expect(decoded == [.single, .twoVirtual])
     }
 }
+
+@Suite("Desktop size on a small screen")
+struct DesktopSizeTests {
+
+    @Test func aDesktopIsSizedForTheScreenUnlessMoreSpaceIsAskedFor() {
+        // Wide enough for the widest window that cannot be made narrower,
+        // and no wider: on a phone every extra point is smaller text and
+        // more to send.
+        #expect(ConnectionSettings().minimumDesktopSize == CGSize(width: 720, height: 600))
+        #expect(!ConnectionSettings().moreSpace)
+        #expect(ConnectionSettings(moreSpace: true).minimumDesktopSize == CGSize(width: 1024, height: 600))
+    }
+
+    @Test func theChoiceIsKeptWithTheComputer() throws {
+        var settings = ConnectionSettings()
+        settings.moreSpace = true
+        let data = try JSONEncoder().encode(settings)
+        #expect(try JSONDecoder().decode(ConnectionSettings.self, from: data).moreSpace)
+    }
+
+    @Test func aRecordFromBeforeTheChoiceExistedMeansTheDefault() throws {
+        let old = Data(#"{"quality":"highPerformance","resolution":"matchWindow","displays":"single"}"#.utf8)
+        let settings = try JSONDecoder().decode(ConnectionSettings.self, from: old)
+        #expect(!settings.moreSpace)
+        #expect(settings.minimumDesktopSize == CGSize(width: 720, height: 600))
+    }
+}
