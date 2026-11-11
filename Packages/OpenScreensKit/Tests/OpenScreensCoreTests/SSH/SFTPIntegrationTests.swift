@@ -143,6 +143,13 @@ extension SSHTests.SSHIntegrationTests {
             let existing = local.file("copy-5")
             try await sftp.download(remotePath: target, to: existing)
             #expect(try Data(contentsOf: existing) == Data("short".utf8))
+
+            // Nothing was left lying beside the files at either end.
+            let remoteNames = try FileManager.default.contentsOfDirectory(atPath: server.directory.path)
+            #expect(remoteNames.sorted() == sizes.indices.map { "dätä \($0).bin" })
+            let localNames = try FileManager.default.contentsOfDirectory(atPath: local.url.path)
+            #expect(localNames.count == 2 * sizes.count + 1)
+            #expect(!localNames.contains { $0.hasPrefix(".") })
             await client.close()
         }
     }
@@ -258,6 +265,143 @@ extension SSHTests.SSHIntegrationTests {
             // gone; and the session is still good for the next transfer.
             #expect(try await sftp.list(server.directory.path).isEmpty)
             #expect(!FileManager.default.fileExists(atPath: remotePath))
+            await client.close()
+        }
+    }
+
+    @Test func aCancelledUploadLeavesTheFileThatWasThere() async throws {
+        try await PrivateSSHServer.run { server in
+            let local = try TemporaryDirectory()
+            let source = local.file("big.bin")
+            try Data.testPattern(count: 48 * 1024 * 1024).write(to: source)
+            let remote = server.directory.appending(path: "report.bin")
+            let original = Data("last week's good copy".utf8)
+            try original.write(to: remote)
+            let client = try await server.connect()
+            let sftp = try await client.openSFTP()
+
+            let seen = Recorder<Data?>()
+            let transfer = Task {
+                try await sftp.upload(localURL: source, to: remote.path) { completed, _ in
+                    if completed > 2 * 1024 * 1024 {
+                        // Megabytes have gone up, and the file they are to
+                        // replace has not been touched.
+                        seen.record(try? Data(contentsOf: remote))
+                        withUnsafeCurrentTask { $0?.cancel() }
+                    }
+                }
+            }
+            await #expect(throws: CancellationError.self) { try await transfer.value }
+            #expect(!seen.values.isEmpty && seen.values.allSatisfy { $0 == original })
+            // Once the server has tidied up, what was there is all there is.
+            #expect(try await sftp.list(server.directory.path).map(\.name) == ["report.bin"])
+            #expect(try Data(contentsOf: remote) == original)
+            #expect(try FileManager.default.contentsOfDirectory(atPath: server.directory.path) == ["report.bin"])
+            await client.close()
+        }
+    }
+
+    @Test func anUploadReplacesAFileWithoutAMomentOfItBeingGone() async throws {
+        try await PrivateSSHServer.run { server in
+            let local = try TemporaryDirectory()
+            let contents = Data.testPattern(count: 3 * 1024 * 1024)
+            let source = local.file("report.bin")
+            try contents.write(to: source)
+            let remote = server.directory.appending(path: "report.bin")
+            let original = Data("last week's good copy".utf8)
+            try original.write(to: remote)
+            let client = try await server.connect()
+            let sftp = try await client.openSFTP()
+
+            // Read the file over and over while it is being replaced. It is
+            // the old one or the new one every time, never missing and
+            // never half of either.
+            let watcher = Task {
+                var seen = Set<Data?>()
+                while !Task.isCancelled {
+                    seen.insert(try? Data(contentsOf: remote))
+                    await Task.yield()
+                }
+                return seen
+            }
+            try await sftp.upload(localURL: source, to: remote.path)
+            #expect(try Data(contentsOf: remote) == contents)
+            watcher.cancel()
+            let seen = await watcher.value
+            #expect(seen.isSubset(of: [original, contents]))
+            #expect(seen.contains(original))
+            #expect(try FileManager.default.contentsOfDirectory(atPath: server.directory.path) == ["report.bin"])
+            await client.close()
+        }
+    }
+
+    @Test func replacingAFileDoesNotChangeWhoMayReadIt() async throws {
+        try await PrivateSSHServer.run { server in
+            let local = try TemporaryDirectory()
+            func permissions(_ url: URL) throws -> Int? {
+                (try FileManager.default.attributesOfItem(atPath: url.path)[.posixPermissions] as? NSNumber)?.intValue
+            }
+            func make(_ url: URL, _ text: String, permissions: Int) throws {
+                try Data(text.utf8).write(to: url)
+                try FileManager.default.setAttributes([.posixPermissions: permissions], ofItemAtPath: url.path)
+            }
+            let client = try await server.connect()
+            let sftp = try await client.openSFTP()
+
+            // A private file on the server is given new contents from a
+            // file anyone may read here, and the other way round; and one
+            // that others may write to stays that way.
+            let source = local.file("source.txt")
+            try make(source, "new", permissions: 0o644)
+            for (name, mode) in [("private.txt", 0o600), ("shared.txt", 0o664), ("script.sh", 0o755)] {
+                let remote = server.directory.appending(path: name)
+                try make(remote, "old", permissions: mode)
+                try await sftp.upload(localURL: source, to: remote.path)
+                #expect(try Data(contentsOf: remote) == Data("new".utf8), "\(name)")
+                // The server's mask for new files may take bits away, as it
+                // would from any new file, and never adds one.
+                let now = try #require(try permissions(remote), "\(name)")
+                #expect(now & ~mode == 0, "\(name) went from \(String(mode, radix: 8)) to \(String(now, radix: 8))")
+                #expect(now & 0o700 == mode & 0o700, "\(name)")
+
+                let copy = local.file(name)
+                try make(copy, "old", permissions: mode)
+                try make(remote, "newer", permissions: 0o644)
+                try await sftp.download(remotePath: remote.path, to: copy)
+                #expect(try Data(contentsOf: copy) == Data("newer".utf8), "\(name)")
+                #expect(try permissions(copy) == mode, "\(name)")
+            }
+            await client.close()
+        }
+    }
+
+    @Test func anUploadIntoAFolderThatTakesNoNewFilesIsRefused() async throws {
+        try await PrivateSSHServer.run { server in
+            let local = try TemporaryDirectory()
+            let source = local.file("report.bin")
+            try Data("new".utf8).write(to: source)
+            // The file can be written. The folder it is in cannot.
+            let folder = server.directory.appending(path: "locked")
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false)
+            let remote = folder.appending(path: "report.bin")
+            let original = Data("last week's good copy".utf8)
+            try original.write(to: remote)
+            try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: folder.path)
+            defer {
+                try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folder.path)
+            }
+            let client = try await server.connect()
+            let sftp = try await client.openSFTP()
+
+            // Writing straight into the file would work, and would leave it
+            // in pieces if the upload then failed. There is nowhere to put
+            // the new file until it is whole, so the upload is not begun.
+            let error = await #expect(throws: SFTPError.self) {
+                try await sftp.upload(localURL: source, to: remote.path)
+            }
+            #expect(error?.statusCode == .permissionDenied)
+            #expect(try Data(contentsOf: remote) == original)
+            #expect(try FileManager.default.contentsOfDirectory(atPath: folder.path) == ["report.bin"])
             await client.close()
         }
     }

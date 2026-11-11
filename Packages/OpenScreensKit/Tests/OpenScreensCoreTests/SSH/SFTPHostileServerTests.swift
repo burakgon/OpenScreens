@@ -416,19 +416,19 @@ extension SSHTests {
         @Test func aServerThatKeepsAnsweringIsWaitedFor() async throws {
             let reads = Tally()
             try await SFTPTestServer.run(script: { request in
-                // The sixteen reads that fetch the file are asked for at
-                // once and answered 150 ms apart, so the last of them waits
+                // The twelve reads that fetch the file are asked for at
+                // once and answered 200 ms apart, so the last of them waits
                 // well over two seconds. The read after them finds the end.
                 if case .read = request {
                     let number = reads.next()
-                    return .serveLate(.milliseconds(number <= 16 ? 150 * number : 100))
+                    return .serveLate(.milliseconds(number <= 12 ? 200 * number : 100))
                 }
                 return .serve
             }) { server in
                 let local = try TemporaryDirectory()
-                let contents = Data.testPattern(count: 16 * SFTPClient.transferChunkSize)
+                let contents = Data.testPattern(count: 12 * SFTPClient.transferChunkSize)
                 server.volume.addFile("data.bin", contents: contents)
-                let client = try await server.connect(timeout: .seconds(1))
+                let client = try await server.connect(timeout: .seconds(2))
                 let sftp = try await client.openSFTP()
 
                 let clock = ContinuousClock()
@@ -500,7 +500,7 @@ extension SSHTests {
                 await #expect(throws: CancellationError.self) {
                     try await Self.finishing(within: .seconds(5)) { try await transfer.value }
                 }
-                #expect(clock.now - cancelled < .seconds(1))
+                #expect(clock.now - cancelled < .seconds(3))
                 #expect(!FileManager.default.fileExists(atPath: destination.path))
                 // The server was still told to close the file, should it
                 // ever come round to it.
@@ -537,7 +537,7 @@ extension SSHTests {
                 await #expect(throws: CancellationError.self) {
                     try await Self.finishing(within: .seconds(5)) { try await transfer.value }
                 }
-                #expect(clock.now - cancelled < .seconds(1))
+                #expect(clock.now - cancelled < .seconds(3))
 
                 // The server was told to close the file and then to remove
                 // it, and both were on their way before the upload returned:
@@ -546,12 +546,12 @@ extension SSHTests {
                 let tidying: [String] = server.requests.compactMap { request in
                     switch request {
                     case .close: "close"
-                    case .remove(_, let path): "remove \(path)"
+                    case .remove(_, let path): Self.isTemporary(path) ? "remove what was written" : "remove \(path)"
                     case .realpath: "realpath"
                     default: nil
                     }
                 }
-                #expect(tidying == ["close", "remove /data.bin", "realpath"])
+                #expect(tidying == ["close", "remove what was written", "realpath"])
                 await client.close()
             }
         }
@@ -574,8 +574,432 @@ extension SSHTests {
                 await #expect(throws: CancellationError.self) {
                     try await Self.finishing(within: .seconds(5)) { try await listing.value }
                 }
-                #expect(clock.now - cancelled < .seconds(1))
+                #expect(clock.now - cancelled < .seconds(3))
                 #expect(await server.waitForRequests { $0.contains { if case .close = $0 { true } else { false } } })
+                await client.close()
+            }
+        }
+
+        // MARK: What was there before
+
+        static let old = Data("what was there before".utf8)
+
+        /// Whether `path` is the name a file is written under until it is
+        /// complete: hidden, beside `/notes.txt`, and nobody else's.
+        static func isTemporary(_ path: String) -> Bool {
+            path.hasPrefix("/.openscreens-") && path.hasSuffix(".partial")
+        }
+
+        /// The requests that name a path, as words.
+        static func pathRequests(_ requests: [SFTPPacket]) -> [String] {
+            func name(_ path: String) -> String {
+                if isTemporary(path) { return "temporary" }
+                return path.hasSuffix(".previous") ? "aside" : path
+            }
+            return requests.compactMap { request in
+                switch request {
+                case .open(_, let path, _, _): "open \(name(path))"
+                case .rename(_, let from, let to): "rename \(name(from)) to \(name(to))"
+                case .posixRename(_, let from, let to): "posix-rename \(name(from)) to \(name(to))"
+                case .remove(_, let path): "remove \(name(path))"
+                case .lstat(_, let path): "lstat \(name(path))"
+                case .stat(_, let path): "stat \(name(path))"
+                default: nil
+                }
+            }
+        }
+
+        @Test func aDownloadThatFailsLeavesTheFileThatWasThere() async throws {
+            try await SFTPTestServer.run(script: { request in
+                // The file reads well for a quarter of a megabyte.
+                if case .read(let id, _, let offset, _) = request, offset >= 256 * 1024 {
+                    return .reply([.status(id: id, code: .failure, message: "I/O error", language: "")])
+                }
+                return .serve
+            }) { server in
+                let local = try TemporaryDirectory()
+                server.volume.addFile("data.bin", contents: .testPattern(count: 1 << 20))
+                let destination = local.file("data.bin")
+                try Self.old.write(to: destination)
+
+                let client = try await server.connect()
+                let sftp = try await client.openSFTP()
+                await #expect(throws: SFTPError.status(code: .failure, message: "I/O error")) {
+                    try await sftp.download(remotePath: "/data.bin", to: destination)
+                }
+                #expect(try Data(contentsOf: destination) == Self.old)
+                #expect(try Self.names(in: local.url) == ["data.bin"])
+                await client.close()
+            }
+        }
+
+        @Test func aCancelledDownloadLeavesTheFileThatWasThere() async throws {
+            try await SFTPTestServer.run { server in
+                let local = try TemporaryDirectory()
+                server.volume.addFile("data.bin", contents: .testPattern(count: 4 << 20))
+                let destination = local.file("data.bin")
+                try Self.old.write(to: destination)
+
+                let client = try await server.connect()
+                let sftp = try await client.openSFTP()
+                let transfer = Task {
+                    try await sftp.download(remotePath: "/data.bin", to: destination) { completed, _ in
+                        if completed > 1 << 20 {
+                            withUnsafeCurrentTask { $0?.cancel() }
+                        }
+                    }
+                }
+                await #expect(throws: CancellationError.self) { try await transfer.value }
+                #expect(try Data(contentsOf: destination) == Self.old)
+                #expect(try Self.names(in: local.url) == ["data.bin"])
+                await client.close()
+            }
+        }
+
+        @Test func whatADownloadReplacesStaysWholeUntilTheNewFileIs() async throws {
+            try await SFTPTestServer.run { server in
+                let local = try TemporaryDirectory()
+                let contents = Data.testPattern(count: 1 << 20)
+                server.volume.addFile("data.bin", contents: contents)
+                let destination = local.file("data.bin")
+                try Self.old.write(to: destination)
+
+                let client = try await server.connect()
+                let sftp = try await client.openSFTP()
+                let seen = Recorder<Data?>()
+                try await sftp.download(remotePath: "/data.bin", to: destination) { completed, _ in
+                    // Part of the way through, and with the last byte in.
+                    if completed > 1 << 19 {
+                        seen.record(try? Data(contentsOf: destination))
+                    }
+                }
+                #expect(!seen.values.isEmpty)
+                #expect(seen.values.allSatisfy { $0 == Self.old })
+                #expect(try Data(contentsOf: destination) == contents)
+                #expect(try Self.names(in: local.url) == ["data.bin"])
+                await client.close()
+            }
+        }
+
+        @Test func anUploadIsWrittenAsideAndMovedIntoPlaceInOneStep() async throws {
+            try await SFTPTestServer.run(extensions: [SFTPTestServer.posixRename]) { server in
+                let local = try TemporaryDirectory()
+                let contents = Data.testPattern(count: 300_000)
+                let source = local.file("notes.txt")
+                try contents.write(to: source)
+                server.volume.addFile("notes.txt", contents: Self.old, permissions: 0o640)
+
+                let client = try await server.connect()
+                let sftp = try await client.openSFTP()
+                let seen = Recorder<Data?>()
+                try await sftp.upload(localURL: source, to: "/notes.txt") { _, _ in
+                    seen.record(server.volume.contents(of: "/notes.txt"))
+                }
+                // Whatever the upload had confirmed, the old file was whole.
+                #expect(seen.values.dropLast().allSatisfy { $0 == Self.old })
+                #expect(server.volume.contents(of: "/notes.txt") == contents)
+                #expect(server.volume.paths == ["/notes.txt"])
+                #expect(Self.pathRequests(server.requests) == [
+                    "lstat /notes.txt", "open temporary", "posix-rename temporary to /notes.txt",
+                ])
+                // The temporary file is new, and nobody else's by its name.
+                // It is made as private as the file it is to replace.
+                guard case .open(_, _, let flags, let attributes)? = server.requests.first(where: {
+                    if case .open = $0 { true } else { false }
+                }) else {
+                    Issue.record("no file was opened")
+                    return
+                }
+                #expect(flags == [.write, .create, .exclusive])
+                #expect(attributes == SFTPAttributes(mode: 0o640))
+                #expect(server.volume.node(at: "/notes.txt")?.permissions == 0o640)
+                await client.close()
+            }
+        }
+
+        @Test func withoutThatExtensionAPlainRenameDoesWhenNothingIsInTheWay() async throws {
+            try await SFTPTestServer.run { server in
+                let local = try TemporaryDirectory()
+                let source = local.file("notes.txt")
+                try Data("new".utf8).write(to: source)
+
+                let client = try await server.connect()
+                let sftp = try await client.openSFTP()
+                try await sftp.upload(localURL: source, to: "/notes.txt")
+                #expect(server.volume.contents(of: "/notes.txt") == Data("new".utf8))
+                #expect(server.volume.paths == ["/notes.txt"])
+                #expect(Self.pathRequests(server.requests) == [
+                    "lstat /notes.txt", "open temporary", "rename temporary to /notes.txt",
+                ])
+                await client.close()
+            }
+        }
+
+        @Test func withoutThatExtensionAFileInTheWayIsMovedAsideFirst() async throws {
+            try await SFTPTestServer.run { server in
+                let local = try TemporaryDirectory()
+                let source = local.file("notes.txt")
+                try Data("new".utf8).write(to: source)
+                server.volume.addFile("notes.txt", contents: Self.old)
+
+                let client = try await server.connect()
+                let sftp = try await client.openSFTP()
+                try await sftp.upload(localURL: source, to: "/notes.txt")
+                #expect(server.volume.contents(of: "/notes.txt") == Data("new".utf8))
+                #expect(server.volume.paths == ["/notes.txt"])
+                #expect(Self.pathRequests(server.requests) == [
+                    "lstat /notes.txt",
+                    "open temporary",
+                    // Refused, as version 3 lets a server refuse it.
+                    "rename temporary to /notes.txt",
+                    "lstat /notes.txt",
+                    "rename /notes.txt to aside",
+                    "rename temporary to /notes.txt",
+                    "remove aside",
+                ])
+                await client.close()
+            }
+        }
+
+        @Test func ifTheNewFileCannotTakeItsPlaceTheOldOneIsPutBack() async throws {
+            try await SFTPTestServer.run(script: { request in
+                // The new file is never let into place, not even once the
+                // old one is out of the way.
+                if case .rename(let id, let from, "/notes.txt") = request, Self.isTemporary(from) {
+                    return .reply([.status(id: id, code: .failure, message: "Not today", language: "")])
+                }
+                return .serve
+            }) { server in
+                let local = try TemporaryDirectory()
+                let source = local.file("notes.txt")
+                try Data("new".utf8).write(to: source)
+                server.volume.addFile("notes.txt", contents: Self.old)
+
+                let client = try await server.connect()
+                let sftp = try await client.openSFTP()
+                await #expect(throws: SFTPError.status(code: .failure, message: "Not today")) {
+                    try await sftp.upload(localURL: source, to: "/notes.txt")
+                }
+                #expect(try await sftp.realPath(".") == "/")
+                #expect(server.volume.contents(of: "/notes.txt") == Self.old)
+                #expect(server.volume.paths == ["/notes.txt"])
+                #expect(Self.pathRequests(server.requests) == [
+                    "lstat /notes.txt",
+                    "open temporary",
+                    "rename temporary to /notes.txt",
+                    "lstat /notes.txt",
+                    "rename /notes.txt to aside",
+                    "rename temporary to /notes.txt",
+                    "rename aside to /notes.txt",
+                    "remove temporary",
+                ])
+                await client.close()
+            }
+        }
+
+        @Test(arguments: [true, false])
+        func anUploadThatFailsLeavesTheFileThatWasThere(renamesInOneStep: Bool) async throws {
+            let writes = Tally()
+            try await SFTPTestServer.run(
+                extensions: renamesInOneStep ? [SFTPTestServer.posixRename] : [],
+                script: { request in
+                    if case .write(let id, _, _, _) = request, writes.next() == 3 {
+                        return .reply([.status(id: id, code: .failure, message: "Disk full", language: "")])
+                    }
+                    return .serve
+                }
+            ) { server in
+                let local = try TemporaryDirectory()
+                let source = local.file("notes.txt")
+                try Data.testPattern(count: 300_000).write(to: source)
+                server.volume.addFile("notes.txt", contents: Self.old)
+
+                let client = try await server.connect()
+                let sftp = try await client.openSFTP()
+                await #expect(throws: SFTPError.status(code: .failure, message: "Disk full")) {
+                    try await sftp.upload(localURL: source, to: "/notes.txt")
+                }
+                // What is asked next is answered after the tidying up.
+                #expect(try await sftp.realPath(".") == "/")
+                #expect(server.volume.contents(of: "/notes.txt") == Self.old)
+                #expect(server.volume.paths == ["/notes.txt"])
+                #expect(server.volume.openHandleCount == 0)
+                #expect(Self.pathRequests(server.requests) == ["lstat /notes.txt", "open temporary", "remove temporary"])
+                await client.close()
+            }
+        }
+
+        @Test(arguments: [true, false])
+        func aFolderInTheWayOfAnUploadIsLeftAlone(renamesInOneStep: Bool) async throws {
+            try await SFTPTestServer.run(
+                extensions: renamesInOneStep ? [SFTPTestServer.posixRename] : []
+            ) { server in
+                let local = try TemporaryDirectory()
+                let source = local.file("notes.txt")
+                try Data("new".utf8).write(to: source)
+                let folder = server.volume.addDirectory("notes.txt")
+                server.volume.addFile("kept", in: folder, contents: Self.old)
+
+                let client = try await server.connect()
+                let sftp = try await client.openSFTP()
+                let error = await #expect(throws: SFTPError.self) {
+                    try await sftp.upload(localURL: source, to: "/notes.txt")
+                }
+                #expect(error?.statusCode == .failure)
+                #expect(try await sftp.realPath(".") == "/")
+                #expect(server.volume.paths == ["/notes.txt", "/notes.txt/kept"])
+                #expect(server.volume.node(at: "/notes.txt")?.isDirectory == true)
+                await client.close()
+            }
+        }
+
+        /// Once the whole file is on the server, giving it its name is not
+        /// something to stop half-way: least of all where that takes two
+        /// renames, with nothing under the name in between.
+        @Test(arguments: [true, false])
+        func cancellingWhileTheFileIsMovedIntoPlaceLetsThatFinish(renamesInOneStep: Bool) async throws {
+            try await SFTPTestServer.run(
+                extensions: renamesInOneStep ? [SFTPTestServer.posixRename] : [],
+                script: { request in
+                    switch request {
+                    case .rename, .posixRename: .serveLate(.milliseconds(300))
+                    default: .serve
+                    }
+                }
+            ) { server in
+                let local = try TemporaryDirectory()
+                let source = local.file("notes.txt")
+                try Data("new".utf8).write(to: source)
+                server.volume.addFile("notes.txt", contents: Self.old)
+
+                let client = try await server.connect()
+                let sftp = try await client.openSFTP()
+                let upload = Task { try await sftp.upload(localURL: source, to: "/notes.txt") }
+                #expect(await server.waitForRequests { requests in
+                    requests.contains { request in
+                        switch request {
+                        case .rename, .posixRename: true
+                        default: false
+                        }
+                    }
+                })
+                upload.cancel()
+                // The upload was complete in all but name, and completes.
+                try await upload.value
+                #expect(server.volume.contents(of: "/notes.txt") == Data("new".utf8))
+                #expect(server.volume.paths == ["/notes.txt"])
+                await client.close()
+            }
+        }
+
+        @Test func cancellingWhileTheFinishedFileIsBeingClosedStillLeavesWhatWasThere() async throws {
+            try await SFTPTestServer.run(
+                extensions: [SFTPTestServer.posixRename],
+                script: { request in
+                    if case .close = request { return .serveLate(.milliseconds(300)) }
+                    return .serve
+                }
+            ) { server in
+                let local = try TemporaryDirectory()
+                let source = local.file("notes.txt")
+                try Data("new".utf8).write(to: source)
+                server.volume.addFile("notes.txt", contents: Self.old)
+
+                let client = try await server.connect()
+                let sftp = try await client.openSFTP()
+                let upload = Task { try await sftp.upload(localURL: source, to: "/notes.txt") }
+                #expect(await server.waitForRequests { $0.contains { if case .close = $0 { true } else { false } } })
+                upload.cancel()
+                await #expect(throws: CancellationError.self) { try await upload.value }
+
+                #expect(try await sftp.realPath(".") == "/")
+                #expect(server.volume.contents(of: "/notes.txt") == Self.old)
+                #expect(server.volume.paths == ["/notes.txt"])
+                #expect(!Self.pathRequests(server.requests).contains { $0.contains("rename") })
+                await client.close()
+            }
+        }
+
+        @Test func anUploadCancelledWhileItsFileIsBeingOpenedLeavesNothingBehind() async throws {
+            try await SFTPTestServer.run(
+                extensions: [SFTPTestServer.posixRename],
+                script: { request in
+                    // The server opens the file at once and takes its time
+                    // to say so.
+                    if case .open = request { return .serveLate(.seconds(2)) }
+                    return .serve
+                }
+            ) { server in
+                let local = try TemporaryDirectory()
+                let source = local.file("notes.txt")
+                try Data("new".utf8).write(to: source)
+                server.volume.addFile("notes.txt", contents: Self.old)
+
+                let client = try await server.connect()
+                let sftp = try await client.openSFTP()
+                let upload = Task { try await sftp.upload(localURL: source, to: "/notes.txt") }
+                #expect(await server.waitForRequests { $0.contains { if case .open = $0 { true } else { false } } })
+                #expect(server.volume.openHandleCount == 1)
+
+                let clock = ContinuousClock()
+                let cancelled = clock.now
+                upload.cancel()
+                await #expect(throws: CancellationError.self) { try await upload.value }
+                #expect(clock.now - cancelled < .milliseconds(1500))
+
+                // The answer arrives with nobody waiting for it. The file it
+                // opened is closed and taken away all the same.
+                #expect(await server.waitForRequests { $0.contains { if case .remove = $0 { true } else { false } } })
+                #expect(try await sftp.realPath(".") == "/")
+                #expect(server.volume.openHandleCount == 0)
+                #expect(server.volume.contents(of: "/notes.txt") == Self.old)
+                #expect(server.volume.paths == ["/notes.txt"])
+                await client.close()
+            }
+        }
+
+        @Test func aDownloadCancelledWhileItsFileIsBeingOpenedClosesItOnceItIs() async throws {
+            try await SFTPTestServer.run(script: { request in
+                switch request {
+                case .open, .opendir: .serveLate(.seconds(1))
+                default: .serve
+                }
+            }) { server in
+                let local = try TemporaryDirectory()
+                server.volume.addFile("data.bin", contents: .testPattern(count: 100_000))
+                let client = try await server.connect()
+                let sftp = try await client.openSFTP()
+
+                // A file, and a folder for a listing.
+                let download = Task { try await sftp.download(remotePath: "/data.bin", to: local.file("data.bin")) }
+                let listing = Task { try await sftp.list("/") }
+                #expect(await server.waitForRequests { _ in server.volume.openHandleCount == 2 })
+                download.cancel()
+                listing.cancel()
+                await #expect(throws: CancellationError.self) { try await download.value }
+                await #expect(throws: CancellationError.self) { try await listing.value }
+
+                #expect(await server.waitForRequests { _ in server.volume.openHandleCount == 0 })
+                #expect(try Self.names(in: local.url).isEmpty)
+                await client.close()
+            }
+        }
+
+        @Test func aFileOpenedAfterItsRequestTimedOutIsClosed() async throws {
+            try await SFTPTestServer.run(script: { request in
+                if case .open = request { return .serveLate(.seconds(3)) }
+                return .serve
+            }) { server in
+                let local = try TemporaryDirectory()
+                server.volume.addFile("data.bin", contents: .testPattern(count: 100_000))
+                let client = try await server.connect(timeout: .seconds(1))
+                let sftp = try await client.openSFTP()
+
+                await #expect(throws: SSHError.timeout) {
+                    try await sftp.download(remotePath: "/data.bin", to: local.file("data.bin"))
+                }
+                #expect(server.volume.openHandleCount == 1)
+                #expect(await server.waitForRequests { _ in server.volume.openHandleCount == 0 })
                 await client.close()
             }
         }

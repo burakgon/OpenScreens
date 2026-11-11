@@ -37,6 +37,11 @@ struct SFTPNameEntry: Equatable, Sendable {
 struct SFTPExtension: Equatable, Sendable {
     var name: String
     var data: String
+
+    /// The name of OpenSSH's extension for renaming the way POSIX `rename`
+    /// does: in one step, replacing whatever has the new name. Most servers
+    /// have taken it up.
+    static let posixRename = "posix-rename@openssh.com"
 }
 
 /// A message of SFTP version 3 (draft-ietf-secsh-filexfer-02), limited to
@@ -62,6 +67,10 @@ enum SFTPPacket: Equatable, Sendable {
     case realpath(id: UInt32, path: String)
     case stat(id: UInt32, path: String)
     case rename(id: UInt32, from: String, to: String)
+    /// `posix-rename@openssh.com`, an extended request. Unlike ``rename``,
+    /// which version 3 lets a server refuse when `to` exists, this replaces
+    /// what is there. Only for servers that advertise it.
+    case posixRename(id: UInt32, from: String, to: String)
 
     // Server to client.
     case version(version: UInt32, extensions: [SFTPExtension])
@@ -127,6 +136,7 @@ enum SFTPPacketCodec {
         case realpath = 16
         case stat = 17
         case rename = 18
+        case extended = 200
         case status = 101
         case handle = 102
         case data = 103
@@ -199,6 +209,13 @@ enum SFTPPacketCodec {
             buffer.writeLengthPrefixed(path)
         case .rename(let id, let from, let to):
             buffer.writeHeader(.rename, id)
+            buffer.writeLengthPrefixed(from)
+            buffer.writeLengthPrefixed(to)
+        case .posixRename(let id, let from, let to):
+            // An extended request names the extension, then carries whatever
+            // that extension defines: here, the two paths.
+            buffer.writeHeader(.extended, id)
+            buffer.writeLengthPrefixed(SFTPExtension.posixRename)
             buffer.writeLengthPrefixed(from)
             buffer.writeLengthPrefixed(to)
         case .version(let version, let extensions):
@@ -355,6 +372,15 @@ enum SFTPPacketCodec {
         case .rename:
             guard let from = body.readLengthPrefixedText(), let to = body.readLengthPrefixedText() else { return nil }
             return .rename(id: id, from: from, to: to)
+        case .extended:
+            guard let name = body.readLengthPrefixedText() else { return nil }
+            // What follows the name is laid out by the extension, so one
+            // that is not known here cannot be read past its name.
+            guard name == SFTPExtension.posixRename else {
+                throw .invalidResponse("an extended request this client does not make")
+            }
+            guard let from = body.readLengthPrefixedText(), let to = body.readLengthPrefixedText() else { return nil }
+            return .posixRename(id: id, from: from, to: to)
         case .status:
             guard let code = body.readInteger(as: UInt32.self) else { return nil }
             // The message and language were added in version 3, and some

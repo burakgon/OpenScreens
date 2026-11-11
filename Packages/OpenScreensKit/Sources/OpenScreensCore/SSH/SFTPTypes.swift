@@ -184,6 +184,25 @@ public enum SFTPPath {
         return directory.hasSuffix("/") ? directory + name : directory + "/" + name
     }
 
+    /// A name for a file that is not meant to stay: one being written until
+    /// it is complete (`partial`), or one moved out of the way of its
+    /// replacement (`previous`). It is hidden, says whose it is, and is
+    /// random enough that nothing else has it. Its length does not depend
+    /// on the name of the file it stands in for, which may already be as
+    /// long as a name can be.
+    static func temporaryName(kind: String) -> String {
+        let number = UInt64.random(in: .min ... .max)
+        let digits = String(number, radix: 16)
+        return ".openscreens-" + String(repeating: "0", count: 16 - digits.count) + digits + "." + kind
+    }
+
+    /// The path of an entry called `name` in the same folder as the entry at
+    /// the remote `path`.
+    static func sibling(of path: String, named name: String) -> String {
+        guard let slash = path.utf8.lastIndex(of: UInt8(ascii: "/")) else { return name }
+        return String(path[...slash]) + name
+    }
+
     /// Whether `name` can stand for one entry of a folder, on the server or
     /// in the local folder a remote entry is copied to.
     ///

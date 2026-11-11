@@ -31,11 +31,31 @@ public actor SFTPClient {
         let reply: CheckedContinuation<SFTPPacket, any Error>
         /// When it was handed to the connection.
         let sentAt: ContinuousClock.Instant
+        /// For a request that opens something: what to do if the server
+        /// opens it after the request was given up on.
+        let opening: AbandonedOpen?
+    }
+
+    /// What becomes of a file or directory that the server opens after the
+    /// request for it was given up on. The handle arrives with nobody left
+    /// to use it or to close it.
+    private enum AbandonedOpen {
+        /// It is closed.
+        case close
+        /// It is closed and the file at this path is deleted: the request
+        /// was to create that file.
+        case closeAndRemove(String)
     }
 
     private var lastRequestID: UInt32 = 0
     private var pendingReplies: [UInt32: PendingRequest] = [:]
+    /// The requests to open something that were given up on and may yet be
+    /// answered, by ID.
+    private var abandonedOpens: [UInt32: AbandonedOpen] = [:]
     private var pendingVersion: CheckedContinuation<UInt32, any Error>?
+    /// Whether the server renames over a file that exists when asked to
+    /// (`posix-rename@openssh.com`).
+    private var supportsPOSIXRename = false
     /// Why the session is over, once it is. Every later request fails with it.
     private var ending: SFTPError?
 
@@ -133,17 +153,30 @@ public actor SFTPClient {
 
     private func receive(_ packet: SFTPPacket) {
         lastHeardFromServer = .now
-        if case .version(let version, _) = packet {
-            pendingVersion?.resume(returning: version)
-            pendingVersion = nil
+        if case .version(let version, let extensions) = packet {
+            // Only the answer to this session's own greeting counts.
+            guard let pendingVersion else { return }
+            supportsPOSIXRename = extensions.contains { $0.name == SFTPExtension.posixRename }
+            pendingVersion.resume(returning: version)
+            self.pendingVersion = nil
+            return
+        }
+        guard let id = packet.replyID else { return }
+        if let waiting = pendingReplies.removeValue(forKey: id) {
+            waiting.reply.resume(returning: packet)
             return
         }
         // A reply nobody is waiting for answers a request that was given up
-        // on: its task was cancelled, or its time ran out.
-        guard let id = packet.replyID, let waiting = pendingReplies.removeValue(forKey: id) else {
-            return
+        // on: its task was cancelled, or its time ran out. It is dropped,
+        // unless it says that the server went on to open something.
+        guard let opening = abandonedOpens.removeValue(forKey: id),
+              case .handle(_, let handle) = packet else { return }
+        switch opening {
+        case .close:
+            discard(handle)
+        case .closeAndRemove(let path):
+            discard(handle, removing: path)
         }
-        waiting.reply.resume(returning: packet)
     }
 
     private func failVersionExchange(with error: any Error) {
@@ -159,6 +192,7 @@ public actor SFTPClient {
             waiting.reply.resume(throwing: reason)
         }
         pendingReplies.removeAll()
+        abandonedOpens.removeAll()
         watchdog?.cancel()
         watchdog = nil
         failVersionExchange(with: reason)
@@ -182,10 +216,16 @@ public actor SFTPClient {
     /// Nothing can pile up that way: a caller holds one request at a time,
     /// and the transfers cap how many callers there are.
     ///
+    /// - Parameter opening: For a request that opens a file or a directory,
+    ///   what is done about it if it is opened after this has stopped
+    ///   waiting.
     /// - Throws: ``SSHError/timeout`` when the server stays silent for too
     ///   long, `CancellationError` when the calling task is cancelled, and
     ///   the reason the session ended when it does.
-    private func exchange(_ request: (UInt32) -> SFTPPacket) async throws -> SFTPPacket {
+    private func exchange(
+        opening: AbandonedOpen? = nil,
+        _ request: (UInt32) -> SFTPPacket
+    ) async throws -> SFTPPacket {
         if let ending {
             throw ending
         }
@@ -197,7 +237,7 @@ public actor SFTPClient {
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation {
                 (continuation: CheckedContinuation<SFTPPacket, any Error>) in
-                pendingReplies[id] = PendingRequest(reply: continuation, sentAt: .now)
+                pendingReplies[id] = PendingRequest(reply: continuation, sentAt: .now, opening: opening)
                 stream.enqueue(bytes)
                 watchPendingRequests()
             }
@@ -209,15 +249,18 @@ public actor SFTPClient {
     private func nextRequestID() -> UInt32 {
         repeat {
             lastRequestID &+= 1
-        } while pendingReplies[lastRequestID] != nil
+        } while pendingReplies[lastRequestID] != nil || abandonedOpens[lastRequestID] != nil
         return lastRequestID
     }
 
     /// Stops waiting for the reply to a request, because its task was
     /// cancelled or the server left it unanswered for too long. The server
-    /// may answer yet; ``receive(_:)`` drops that reply.
+    /// may answer yet. ``receive(_:)`` drops that reply, after closing what
+    /// the server opened if the request was to open something.
     private func abandon(_ id: UInt32, because reason: any Error) {
-        pendingReplies.removeValue(forKey: id)?.reply.resume(throwing: reason)
+        guard let request = pendingReplies.removeValue(forKey: id) else { return }
+        abandonedOpens[id] = request.opening
+        request.reply.resume(throwing: reason)
     }
 
     /// Makes sure the requests that are waiting have someone watching the
@@ -342,7 +385,7 @@ public actor SFTPClient {
     /// The raw entries of a directory, for callers that need more than
     /// ``SFTPItem`` shows.
     func entries(of path: String) async throws -> [SFTPNameEntry] {
-        let reply = try await exchange { .opendir(id: $0, path: path) }
+        let reply = try await exchange(opening: .close) { .opendir(id: $0, path: path) }
         guard case .handle(_, let handle) = reply else {
             throw Self.failure(for: reply)
         }
@@ -429,11 +472,88 @@ public actor SFTPClient {
         try expectSuccess(await exchange { .rename(id: $0, from: path, to: newPath) })
     }
 
+    /// Gives the finished file at `temporary` the name `path`, in place of
+    /// whatever file has that name.
+    ///
+    /// With `posix-rename@openssh.com`, which OpenSSH and most other servers
+    /// offer, that is one request and the server does it in one step: the
+    /// name leads to the old file or to the new one, and never to nothing.
+    ///
+    /// Version 3 itself only has a rename that a server may refuse when the
+    /// new name is taken. Without the extension that rename is tried first,
+    /// and is all it takes when nothing is in the way or the server replaces
+    /// anyway. If it is refused and a file is in the way, that file is moved
+    /// aside, the new one renamed into place and the old one deleted; if the
+    /// new one cannot be renamed even then, the old one is moved back. This
+    /// is the best the protocol allows. For the moment between the two
+    /// renames nothing has the name, and a connection lost in that moment
+    /// leaves the old file whole under the name it was moved aside to.
+    ///
+    /// A folder in the way is never moved: the rename fails and the folder
+    /// stays.
+    ///
+    /// The steps run in a task of their own, so that cancelling the caller
+    /// cannot stop them half-way. The wait is bounded all the same, by the
+    /// time each request is given.
+    func moveIntoPlace(_ temporary: String, as path: String) async throws {
+        try await Task { try await self.replace(path, with: temporary) }.value
+    }
+
+    private func replace(_ path: String, with temporary: String) async throws {
+        if supportsPOSIXRename {
+            try expectSuccess(await exchange { .posixRename(id: $0, from: temporary, to: path) })
+            return
+        }
+
+        let refusal: SFTPError
+        do {
+            try await rename(temporary, to: path)
+            return
+        } catch let error as SFTPError where error.statusCode != nil {
+            refusal = error
+        }
+        // Version 3 has no code for "the name is taken", so look. Anything
+        // but a file or a link in the way leaves the refusal standing.
+        guard let inTheWay = try? await attributes(of: path, followSymlinks: false),
+              inTheWay.isRegularFile || inTheWay.isSymbolicLink else {
+            throw refusal
+        }
+        let aside = SFTPPath.sibling(of: path, named: SFTPPath.temporaryName(kind: "previous"))
+        try await rename(path, to: aside)
+        do {
+            try await rename(temporary, to: path)
+        } catch {
+            try? await rename(aside, to: path)
+            throw error
+        }
+        // The upload is done. If the old file cannot be deleted it stays
+        // where it was moved to, which is no reason to call the upload
+        // failed.
+        try? await remove(aside)
+    }
+
     // MARK: Open files
 
-    func open(_ path: String, flags: SFTPOpenFlags) async throws -> SFTPHandle {
-        let reply = try await exchange {
-            .open(id: $0, path: path, flags: flags, attributes: SFTPAttributes())
+    /// Opens a file.
+    ///
+    /// - Parameters:
+    ///   - permissions: Who may read, write and run the file, if this
+    ///     creates it; `nil` leaves that to the server. The server's own
+    ///     mask for new files still applies, so the file can end up with
+    ///     fewer permissions than asked for, never with more. Only the nine
+    ///     ordinary bits are sent.
+    ///   - removingIfAbandoned: Whether the file is a new one that this
+    ///     request creates, to be deleted again if the request is given up
+    ///     on and the server creates it all the same.
+    func open(
+        _ path: String,
+        flags: SFTPOpenFlags,
+        permissions: UInt16? = nil,
+        removingIfAbandoned: Bool = false
+    ) async throws -> SFTPHandle {
+        let attributes = SFTPAttributes(mode: permissions.map { UInt32($0 & 0o777) })
+        let reply = try await exchange(opening: removingIfAbandoned ? .closeAndRemove(path) : .close) {
+            .open(id: $0, path: path, flags: flags, attributes: attributes)
         }
         guard case .handle(_, let handle) = reply else {
             throw Self.failure(for: reply)

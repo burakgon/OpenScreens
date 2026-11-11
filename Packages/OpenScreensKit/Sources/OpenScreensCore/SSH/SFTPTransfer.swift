@@ -21,10 +21,16 @@ extension SFTPClient {
 
     /// Copies a remote file to this device.
     ///
-    /// The file is fetched with many reads in flight at once and written
-    /// straight to `localURL`, replacing what is there. If the transfer fails
-    /// or its task is cancelled, the partial file is removed. Cancelling
-    /// returns at once, whether or not the server is still answering.
+    /// The file is fetched with many reads in flight at once into a hidden
+    /// file beside `localURL`, which takes the place of whatever is at
+    /// `localURL` in one step when it is complete. If the transfer fails or
+    /// its task is cancelled, the partial file is removed and what was at
+    /// `localURL` is as it was. Cancelling returns at once, whether or not
+    /// the server is still answering.
+    ///
+    /// A symbolic link at `localURL` is replaced by the file; it is not
+    /// written through to what it points at. A file that is replaced passes
+    /// its permissions on to the one that replaces it.
     ///
     /// - Parameter progress: Called as data arrives with the bytes received
     ///   so far and the file's size, when the server reports one.
@@ -38,10 +44,21 @@ extension SFTPClient {
 
     /// Copies a file on this device to the server.
     ///
-    /// The remote file is created, or emptied if it exists, and filled with
-    /// many writes in flight at once. If the transfer fails or its task is
-    /// cancelled, the server is told to remove the partial file, and the
-    /// call returns without waiting for it to do so.
+    /// The file is written, with many writes in flight at once, to a hidden
+    /// file beside `remotePath`, which is given the name `remotePath` when
+    /// it is complete (see ``moveIntoPlace(_:as:)`` for how, and for what a
+    /// server without the means to do that in one step can and cannot
+    /// promise). If the transfer fails or its task is cancelled before that,
+    /// the server is told to remove the partial file, the call returns
+    /// without waiting for it to do so, and what was at `remotePath` is as
+    /// it was.
+    ///
+    /// The folder has to allow a new file to be made in it, even when the
+    /// upload replaces a file that could itself be written to. A symbolic
+    /// link at `remotePath` is replaced by the file, not written through.
+    /// A file that is replaced passes its permissions on to the one that
+    /// replaces it, as far as the server gives them to a new file; the new
+    /// file belongs to whoever uploaded it.
     ///
     /// - Parameter progress: Called as the server confirms data with the
     ///   bytes confirmed so far and the file's size.
@@ -222,12 +239,15 @@ extension SFTPClient {
             // The size is only a hint, for progress and for pacing; a server
             // that will not say is not a reason to fail.
             let size = try await attributesIfOffered(of: handle)?.size.map { Int64(clamping: $0) }
-            let file = try LocalFile(creating: localURL)
+            // Written beside the destination and moved over it when every
+            // byte is there. Until then, and if it never comes to that,
+            // what is at the destination stays as it is.
+            let file = try LocalFile(replacing: localURL)
             do {
                 received = try await fetch(handle, into: file, expectedSize: size, progress: progress)
-                try file.close()
+                try file.finish()
             } catch {
-                file.closeAndRemove()
+                file.abandon()
                 throw error
             }
         } catch {
@@ -236,6 +256,17 @@ extension SFTPClient {
         }
         try await close(handle)
         return received
+    }
+
+    /// What is at `path` on the server, the entry itself and not what a link
+    /// there points to; `nil` when the server says nothing is, or refuses to
+    /// say.
+    private nonisolated func entryIfPresent(at path: String) async throws -> SFTPAttributes? {
+        do {
+            return try await attributes(of: path, followSymlinks: false)
+        } catch let error as SFTPError where error.statusCode != nil {
+            return nil
+        }
     }
 
     /// What the server says about an open file, or `nil` when it refuses to
@@ -351,16 +382,36 @@ extension SFTPClient {
     ) async throws -> Int64 {
         let file = try LocalFile(reading: localURL)
         let size = try file.size()
-        let handle = try await open(remotePath, flags: [.write, .create, .truncate])
+        // A file that is replaced hands its permissions on to its
+        // replacement: putting new contents into a file that was private
+        // must not make it public.
+        let replaced = try await entryIfPresent(at: remotePath)
+        let permissions = replaced?.isRegularFile == true ? replaced?.permissions : nil
+        // Written under a name of its own beside the destination, which is
+        // not touched until the whole file is on the server. The name is
+        // new, so the file is created and must not be there already.
+        let temporary = SFTPPath.sibling(of: remotePath, named: SFTPPath.temporaryName(kind: "partial"))
+        let handle = try await open(
+            temporary, flags: [.write, .create, .exclusive],
+            permissions: permissions, removingIfAbandoned: true)
         let sent: Int64
         do {
             sent = try await store(file, into: handle, size: size, progress: progress)
             try await close(handle)
+            // The last point at which cancelling still leaves everything as
+            // it was. Past it the file is moved into place, and that is not
+            // left half-done.
+            try Task.checkCancellation()
         } catch {
-            // A half-written file under the real name would pass for the
-            // whole thing. The server is told to take it away again, and is
+            // The server is told to take the partial file away again, and is
             // not waited for: it may be the reason the transfer failed.
-            await discard(handle, removing: remotePath)
+            await discard(handle, removing: temporary)
+            throw error
+        }
+        do {
+            try await moveIntoPlace(temporary, as: remotePath)
+        } catch {
+            await discard(nil, removing: temporary)
             throw error
         }
         return sent
@@ -432,38 +483,73 @@ extension SFTPClient {
 ///
 /// Not thread-safe; a transfer uses it from its own task only.
 final class LocalFile {
+    /// The file this is about: the one being read, or the one being
+    /// replaced. Errors name it.
     let path: String
+    /// Where the bytes go while a file that is to replace another is being
+    /// written; `nil` for a file that is read.
+    private let temporaryPath: String?
     private var descriptor: Int32
 
-    private init(path: String, descriptor: Int32) {
+    private init(path: String, temporaryPath: String?, descriptor: Int32) {
         self.path = path
+        self.temporaryPath = temporaryPath
         self.descriptor = descriptor
     }
 
     /// Opens an existing file for reading.
     convenience init(reading url: URL) throws(SFTPError) {
-        try self.init(url: url, flags: O_RDONLY)
-    }
-
-    /// Creates a file for writing, emptying it if it exists.
-    convenience init(creating url: URL) throws(SFTPError) {
-        try self.init(url: url, flags: O_WRONLY | O_CREAT | O_TRUNC)
-    }
-
-    private convenience init(url: URL, flags: Int32) throws(SFTPError) {
         let path = url.path(percentEncoded: false)
-        // The mode only matters when the file is created; the user's umask
-        // narrows it as usual.
-        let descriptor = Darwin.open(path, flags | O_CLOEXEC, 0o666)
+        let descriptor = Darwin.open(path, O_RDONLY | O_CLOEXEC)
         guard descriptor >= 0 else {
             throw Self.failure(path: path, code: errno)
         }
-        self.init(path: path, descriptor: descriptor)
+        self.init(path: path, temporaryPath: nil, descriptor: descriptor)
+    }
+
+    /// Starts a file that is to take the place of whatever is at `url` once
+    /// it is complete.
+    ///
+    /// The bytes go to a new, hidden file in the same folder. ``finish()``
+    /// moves that file over `url` in one step, so what is at `url` is whole
+    /// at every moment: the old file, then the new one. ``abandon()``
+    /// deletes it and leaves `url` as it was.
+    convenience init(replacing url: URL) throws(SFTPError) {
+        let path = url.path(percentEncoded: false)
+        let temporaryPath = url.deletingLastPathComponent()
+            .appending(path: SFTPPath.temporaryName(kind: "partial"))
+            .path(percentEncoded: false)
+        // A file that is replaced hands its permissions on to its
+        // replacement: new contents do not change who may read a file.
+        var status = stat()
+        let replacedMode = lstat(path, &status) == 0 && status.st_mode & S_IFMT == S_IFREG
+            ? status.st_mode & 0o777 : nil
+        // The file is new by its name; if something is there after all, it
+        // is not this transfer's to write into. Where nothing is replaced,
+        // the mode is narrowed by the user's umask as usual.
+        let descriptor = Darwin.open(
+            temporaryPath, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, replacedMode ?? 0o666)
+        guard descriptor >= 0 else {
+            throw Self.failure(path: path, code: errno)
+        }
+        // The umask has no say in what an existing file is allowed to be.
+        if let replacedMode, fchmod(descriptor, replacedMode) != 0 {
+            let code = errno
+            Darwin.close(descriptor)
+            unlink(temporaryPath)
+            throw Self.failure(path: path, code: code)
+        }
+        self.init(path: path, temporaryPath: temporaryPath, descriptor: descriptor)
     }
 
     deinit {
+        // Still open means neither finished nor abandoned. What there is of
+        // a file that was being written is not left lying about.
         if descriptor >= 0 {
             Darwin.close(descriptor)
+            if let temporaryPath {
+                unlink(temporaryPath)
+            }
         }
     }
 
@@ -547,11 +633,34 @@ final class LocalFile {
         }
     }
 
-    /// Gives up on a file that was being written and deletes what there is
-    /// of it.
-    func closeAndRemove() {
+    /// Completes a file started with ``init(replacing:)``: closes it and
+    /// moves it into the place of what it replaces. If that cannot be done,
+    /// what there is of it is deleted and the destination is left as it was.
+    func finish() throws(SFTPError) {
+        guard let temporaryPath else {
+            try close()
+            return
+        }
+        do {
+            try close()
+        } catch {
+            unlink(temporaryPath)
+            throw error
+        }
+        guard rename(temporaryPath, path) == 0 else {
+            let code = errno
+            unlink(temporaryPath)
+            throw Self.failure(path: path, code: code)
+        }
+    }
+
+    /// Gives up on a file started with ``init(replacing:)`` and deletes what
+    /// there is of it. What it was to replace is left as it was.
+    func abandon() {
         try? close()
-        unlink(path)
+        if let temporaryPath {
+            unlink(temporaryPath)
+        }
     }
 
     private static func failure(path: String, code: Int32) -> SFTPError {

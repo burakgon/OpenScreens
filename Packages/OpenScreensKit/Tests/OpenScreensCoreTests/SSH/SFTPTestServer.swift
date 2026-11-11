@@ -60,7 +60,9 @@ final class SFTPTestServer: Sendable {
     /// `body` returns or throws.
     ///
     /// - Parameters:
-    ///   - extensions: What the server claims to support beyond version 3.
+    ///   - extensions: What the server claims to support beyond version 3,
+    ///     and then does support. OpenSSH's own list starts with
+    ///     ``posixRename``.
     ///   - script: Decides what happens to each request; by default they are
     ///     all served honestly.
     static func run<Result>(
@@ -154,6 +156,10 @@ final class SFTPTestServer: Sendable {
         }
         return condition(requests)
     }
+
+    /// The extension for renaming over a file that exists, as a server
+    /// advertises it.
+    static let posixRename = SFTPExtension(name: SFTPExtension.posixRename, data: "1")
 
     private struct Unsupported: Error {}
 
@@ -471,6 +477,12 @@ extension SFTPTestServer.Volume.State {
             // As OpenSSH does it: a name that is taken is not given away.
             guard nodes[to] == nil else {
                 return Self.status(id, .failure, "Failure")
+            }
+            return move(id, from: from, to: to)
+
+        case .posixRename(let id, let from, let to):
+            guard extensions.contains(where: { $0.name == SFTPExtension.posixRename }) else {
+                return Self.status(id, .operationUnsupported, "Unsupported")
             }
             return move(id, from: from, to: to)
 

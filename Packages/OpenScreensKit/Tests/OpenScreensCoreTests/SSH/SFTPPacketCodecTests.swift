@@ -41,6 +41,7 @@ extension SSHTests {
             .realpath(id: 13, path: "."),
             .stat(id: 14, path: "/b"),
             .rename(id: 15, from: "/from", to: "/to"),
+            .posixRename(id: 26, from: "/dir/.partial", to: "/dir/file"),
             .version(version: 3, extensions: []),
             .version(version: 3, extensions: [
                 SFTPExtension(name: "posix-rename@openssh.com", data: "1"),
@@ -142,6 +143,26 @@ extension SSHTests {
                     0, 0, 0, 4,
                     0, 0, 0x01, 0xA4,
                 ]))
+        }
+
+        @Test func aPOSIXRenameIsAnExtendedRequestNamingTheExtension() throws {
+            // SSH_FXP_EXTENDED: type 200, id, the extension's name, then
+            // what the extension defines: the old path and the new one.
+            let name = Array("posix-rename@openssh.com".utf8)
+            let expected: [UInt8] = [0, 0, 0, UInt8(5 + 4 + name.count + 5 + 5)]
+                + [200, 0, 0, 0, 9]
+                + [0, 0, 0, UInt8(name.count)] + name
+                + [0, 0, 0, 1, 0x61]
+                + [0, 0, 0, 1, 0x62]
+            #expect(SFTPPacketCodec.encode(.posixRename(id: 9, from: "a", to: "b")) == Self.buffer(expected))
+
+            // Another extension's request cannot be read: only its name is
+            // laid out by the protocol.
+            let other = Array("statvfs@openssh.com".utf8)
+            #expect(throws: SFTPError.self) {
+                try SFTPPacketCodec.decode(body: Self.buffer(
+                    [200, 0, 0, 0, 9, 0, 0, 0, UInt8(other.count)] + other + [0, 0, 0, 1, 0x61]))
+            }
         }
 
         @Test func decodesAReplyTheWayOpenSSHSendsIt() throws {
