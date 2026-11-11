@@ -180,7 +180,7 @@ public final class SSHClient: Sendable {
                                     serverAuthDelegate: handshake,
                                     transportProtectionSchemes: SSHKeyExchangeGate.transportProtectionSchemes)),
                                 allocator: channel.allocator,
-                                inboundChildChannelInitializer: nil)
+                                inboundChildChannelInitializer: refuseChannel)
                             try channel.pipeline.syncOperations.addHandlers([gate, ssh, handshake])
                             return (
                                 channel, handshake.authentication,
@@ -199,6 +199,23 @@ public final class SSHClient: Sendable {
         } onCancel: {
             attempt.cancel()
         }
+    }
+
+    /// Turns down a channel the server asks to open.
+    ///
+    /// A server opens channels towards a client for things the client asked
+    /// for first: connections to a port it had the server listen on, X11
+    /// windows, its key agent. This client asks for none of those, so a
+    /// channel from the server is one nobody invited. Without this,
+    /// swift-nio-ssh would confirm every one of them and keep it, with
+    /// megabytes of room for the server to fill, for as long and as many as
+    /// the server liked.
+    private static func refuseChannel(
+        _ channel: any Channel,
+        type: SSHChannelType
+    ) -> EventLoopFuture<Void> {
+        channel.eventLoop.makeFailedFuture(
+            SSHError.channelOpenRefused("This client accepts no channels from the server."))
     }
 
     private static func bootstrap(timeout: TimeAmount) -> NIOTSConnectionBootstrap {
