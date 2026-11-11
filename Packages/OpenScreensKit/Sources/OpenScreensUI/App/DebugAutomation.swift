@@ -287,6 +287,7 @@ enum DebugAutomation {
     ///                       modifier flags (s, o, c, t, l), then d, u or p
     ///     f=58,o            modifier change through the canvas (macOS): key
     ///                       code and the flags that are down afterwards
+    ///     c=640,400         click at this pixel of the picture
     ///     clip=text         put text on the remote clipboard
     ///     curtain=on|off    hide or show the remote Mac's own screen
     ///     lock=1            end the session, as closing its window does
@@ -323,6 +324,18 @@ enum DebugAutomation {
             case "e", "f":
                 sendCanvasEvent(isModifier: verb == "f", argument)
             #endif
+            case "c":
+                let parts = argument.split(separator: ",").compactMap { Double($0) }
+                guard parts.count == 2 else { continue }
+                // Paced like a hand: some controls, a Mac's status items
+                // among them, ignore a press that arrives with its release.
+                let point = CGPoint(x: parts[0], y: parts[1])
+                session.pointer(buttons: [], at: point)
+                try? await Task.sleep(for: .milliseconds(200))
+                session.pointer(buttons: .left, at: point)
+                try? await Task.sleep(for: .milliseconds(90))
+                session.pointer(buttons: [], at: point)
+                try? await Task.sleep(for: .milliseconds(250))
             case "clip":
                 // Straight to the remote clipboard, leaving this device's alone.
                 session.engine.sendClipboardText(argument)
