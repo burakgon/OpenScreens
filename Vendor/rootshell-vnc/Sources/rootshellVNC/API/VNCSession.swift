@@ -2030,6 +2030,8 @@ public final class VNCSession {
             framesDecoded: framesDecoded,
             lossGapsDetected: gaps,
             framesDroppedWhileGated: droppedWhileGated,
+            usesHardwareVideoDecoder: isHighPerformanceMode
+                ? HEVCDecoder.lastDecoderUsesHardware : nil,
             capturedAt: Date())
     }
 

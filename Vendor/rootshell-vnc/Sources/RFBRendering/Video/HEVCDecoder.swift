@@ -37,6 +37,25 @@ public enum HEVCDecoderError: Error, Sendable, LocalizedError {
 
 /// Decodes HEVC (H.265) NAL units using the public VideoToolbox API.
 public final class HEVCDecoder: @unchecked Sendable {
+    /// Whether the decoder most recently set up on this device decodes in
+    /// hardware. Nil before any has been, or when VideoToolbox would not
+    /// say. It is the device that decides, so one answer serves every
+    /// stream.
+    public static var lastDecoderUsesHardware: Bool? {
+        hardwareLock.lock()
+        defer { hardwareLock.unlock() }
+        return lastHardwareAnswer
+    }
+
+    private static let hardwareLock = NSLock()
+    nonisolated(unsafe) private static var lastHardwareAnswer: Bool?
+
+    private static func noteDecoder(usesHardware: Bool?) {
+        hardwareLock.lock()
+        lastHardwareAnswer = usesHardware
+        hardwareLock.unlock()
+    }
+
 
     /// Delivers a decoded frame with its presentation time and the per-frame
     /// tag passed to `decode(...)` (used to route each frame to its screen band).
@@ -279,6 +298,7 @@ public final class HEVCDecoder: @unchecked Sendable {
             allocator: kCFAllocatorDefault,
             valueOut: &raw)
         let hardware = propertyStatus == noErr ? raw as? Bool : nil
+        Self.noteDecoder(usesHardware: hardware)
         let dims = CMVideoFormatDescriptionGetDimensions(formatDesc)
         VNCLogger(category: "HEVCDecoder").info(
             "VT session: \(dims.width)x\(dims.height) "
