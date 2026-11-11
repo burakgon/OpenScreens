@@ -63,6 +63,21 @@ struct FileBrowserTests {
         #expect(FileBrowser.isUsableName(name) == isUsable)
     }
 
+    @Test func aTransferSaysWhenItCouldNotCopyEverything() {
+        var transfer = FileBrowser.Transfer(name: "Photos", isUpload: false)
+        #expect(transfer.skippedNote == nil)
+        transfer.skippedCount = 1
+        #expect(transfer.skippedNote == "1 item with a name that cannot be shown was skipped.")
+        transfer.skippedCount = 12
+        #expect(transfer.skippedNote == "12 items with names that cannot be shown were skipped.")
+    }
+
+    @Test func aFolderSaysWhenItHoldsMoreThanIsShown() {
+        #expect(FileBrowser.unlistedNote(for: 0) == nil)
+        #expect(FileBrowser.unlistedNote(for: 1) == "1 item with a name that cannot be shown is not listed.")
+        #expect(FileBrowser.unlistedNote(for: 3) == "3 items with names that cannot be shown are not listed.")
+    }
+
     @Test func pathsAreJoinedWithOneSlash() {
         #expect(FileBrowser.join("/Users/me", "Desktop") == "/Users/me/Desktop")
         #expect(FileBrowser.join("/", "tmp") == "/tmp")

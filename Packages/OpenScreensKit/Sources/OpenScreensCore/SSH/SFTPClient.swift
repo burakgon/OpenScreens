@@ -352,7 +352,10 @@ public actor SFTPClient {
         guard case .name(_, let entries) = reply, let entry = entries.first else {
             throw Self.failure(for: reply)
         }
-        return entry.filename
+        guard let path = entry.filename else {
+            throw SFTPError.invalidResponse("a path that is not UTF-8")
+        }
+        return path
     }
 
     /// The directory the session starts in: the user's home, unless the
@@ -364,11 +367,21 @@ public actor SFTPClient {
     // MARK: Looking
 
     /// The contents of a directory, sorted by name the way Finder sorts.
-    /// The `.` and `..` entries are left out.
+    /// The `.` and `..` entries are left out, and so are entries whose names
+    /// cannot be used; ``listing(of:)`` says how many of those there were.
     public func list(_ path: String) async throws -> [SFTPItem] {
-        try await entries(of: path)
-            .map { SFTPItem(name: $0.filename, directory: path, attributes: $0.attributes) }
-            .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+        try await listing(of: path).items
+    }
+
+    /// The contents of a directory, together with the number of entries
+    /// that had to be left out because of their names.
+    public func listing(of path: String) async throws -> SFTPListing {
+        let contents = try await entries(of: path)
+        return SFTPListing(
+            items: contents.entries
+                .map { SFTPItem($0, directory: path) }
+                .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending },
+            unusableNameCount: contents.unusableNameCount)
     }
 
     /// The most entries taken from one directory, `.` and `..` included. A
@@ -382,15 +395,16 @@ public actor SFTPClient {
     /// this within ``maximumListingEntries``.
     static let maximumListingBytes = 64 * 1024 * 1024
 
-    /// The raw entries of a directory, for callers that need more than
-    /// ``SFTPItem`` shows.
-    func entries(of path: String) async throws -> [SFTPNameEntry] {
+    /// The entries of a directory that can be used, each with what it is
+    /// settled, for callers that need more than ``SFTPItem`` shows.
+    func entries(of path: String) async throws -> SFTPDirectoryContents {
         let reply = try await exchange(opening: .close) { .opendir(id: $0, path: path) }
         guard case .handle(_, let handle) = reply else {
             throw Self.failure(for: reply)
         }
 
-        var entries: [SFTPNameEntry] = []
+        var listed: [(name: String, attributes: SFTPAttributes)] = []
+        var unusableNameCount = 0
         // What the server lists counts towards the limits whether or not it
         // is kept, so that a listing of nothing but names to leave out comes
         // to an end too.
@@ -409,7 +423,7 @@ public actor SFTPClient {
                     guard !batch.isEmpty else { break reading }
                     listedCount += batch.count
                     for entry in batch {
-                        listedBytes += entry.filename.utf8.count + entry.longname.utf8.count
+                        listedBytes += entry.name.count + entry.longname.utf8.count
                     }
                     guard listedCount <= Self.maximumListingEntries else {
                         throw SFTPError.tooManyEntries(limit: Self.maximumListingEntries)
@@ -418,9 +432,22 @@ public actor SFTPClient {
                         throw SFTPError.invalidResponse(
                             "a folder listing of more than \(Self.maximumListingBytes / (1024 * 1024)) MB")
                     }
-                    // `.` and `..` are not contents, and anything else that
-                    // is not one plain name cannot be used as one.
-                    entries.append(contentsOf: batch.filter { SFTPPath.isUsableName($0.filename) })
+                    for entry in batch {
+                        // A name that is not text cannot be shown, and cannot
+                        // be asked for either: the server knows the entry by
+                        // bytes that no text stands for. A name that is not
+                        // the name of one entry cannot be used as one. Both
+                        // are left out and counted, so that the rest of the
+                        // folder is still there to be had.
+                        guard let name = entry.filename, SFTPPath.isUsableName(name) else {
+                            // `.` and `..` are not contents, and not missed.
+                            if entry.name != Array(".".utf8), entry.name != Array("..".utf8) {
+                                unusableNameCount += 1
+                            }
+                            continue
+                        }
+                        listed.append((name, entry.attributes))
+                    }
                 case .status(_, .endOfFile, _, _):
                     break reading
                 default:
@@ -432,7 +459,78 @@ public actor SFTPClient {
             throw error
         }
         try await close(handle)
+        return SFTPDirectoryContents(
+            entries: try await settlingKinds(of: listed, in: path),
+            unusableNameCount: unusableNameCount)
+    }
+
+    /// Settles what each entry of a listing is.
+    ///
+    /// Servers say so in the listing itself, nearly all of them, and then
+    /// this asks for nothing. An entry the listing does not describe is
+    /// asked about, a window of requests at a time; see
+    /// ``kindOfEntry(at:)``.
+    private func settlingKinds(
+        of listed: [(name: String, attributes: SFTPAttributes)],
+        in path: String
+    ) async throws -> [SFTPDirectoryEntry] {
+        var entries = listed.map {
+            SFTPDirectoryEntry(name: $0.name, attributes: $0.attributes, kind: $0.attributes.kind ?? .other)
+        }
+        var undescribed = listed.indices.filter { listed[$0].attributes.kind == nil }[...]
+        guard !undescribed.isEmpty else { return entries }
+
+        try await withThrowingTaskGroup(of: (Int, SFTPAttributes?, SFTPFileKind).self) { group in
+            var inFlight = 0
+            while true {
+                while inFlight < Self.transferPipelineDepth, let index = undescribed.popFirst() {
+                    let entryPath = SFTPPath.join(path, listed[index].name)
+                    group.addTask {
+                        let (attributes, kind) = try await self.kindOfEntry(at: entryPath)
+                        return (index, attributes, kind)
+                    }
+                    inFlight += 1
+                }
+                guard let (index, attributes, kind) = try await group.next() else { break }
+                inFlight -= 1
+                entries[index].kind = kind
+                // What the server said when asked is fuller than the nothing
+                // the listing said.
+                if let attributes {
+                    entries[index].attributes = attributes
+                }
+            }
+        }
         return entries
+    }
+
+    /// Finds out what the entry at `path` is, for a listing that did not
+    /// say.
+    ///
+    /// The server is asked about the entry itself, not about what a link
+    /// there points to. If it does not say what the entry is even then, the
+    /// one thing left to go by is whether it lets the entry be opened as a
+    /// directory: if so it is one, and if not it is taken for a file.
+    private func kindOfEntry(at path: String) async throws -> (SFTPAttributes?, SFTPFileKind) {
+        var attributes: SFTPAttributes?
+        do {
+            attributes = try await self.attributes(of: path, followSymlinks: false)
+        } catch let error as SFTPError where error.statusCode != nil {
+            // A refusal to say is no answer; go on to trying.
+        }
+        if let kind = attributes?.kind {
+            return (attributes, kind)
+        }
+        let reply = try await exchange(opening: .close) { .opendir(id: $0, path: path) }
+        switch reply {
+        case .handle(_, let handle):
+            discard(handle)
+            return (attributes, .directory)
+        case .status(_, let code, _, _) where code != .ok:
+            return (attributes, .file)
+        default:
+            throw Self.failure(for: reply)
+        }
     }
 
     /// What the server knows about the file at `path`.

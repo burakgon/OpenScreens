@@ -217,20 +217,42 @@ extension SSHTests {
             #expect(decoded == .attributes(id: 1, attributes: SFTPAttributes()))
         }
 
-        @Test func fileNamesThatAreNotUTF8AreStillDecoded() throws {
-            // Latin-1 "é" is not valid UTF-8. The name must come through as
-            // something, and the fields after it must still line up.
+        @Test func aFileNameThatIsNotUTF8IsKeptAsTheBytesItIs() throws {
+            // Latin-1 "é" is not valid UTF-8. The name is kept as it came,
+            // it is not made into text that the server never sent, and the
+            // fields after it still line up.
+            let latin1: [UInt8] = [0x63, 0x61, 0x66, 0xE9]
             let packet = try SFTPPacketCodec.decode(body: Self.buffer(
                 [104, 0, 0, 0, 1, 0, 0, 0, 1]
-                    + [0, 0, 0, 4, 0x63, 0x61, 0x66, 0xE9]
+                    + [0, 0, 0, 4] + latin1
                     + [0, 0, 0, 0]
                     + [0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 3]))
             guard case .name(1, let entries) = packet, let entry = entries.first else {
                 Issue.record("expected one name entry, got \(packet)")
                 return
             }
-            #expect(entry.filename == "caf\u{FFFD}")
+            #expect(entry.name == latin1)
+            #expect(entry.filename == nil)
             #expect(entry.attributes == SFTPAttributes(size: 3))
+
+            // And it goes back out as the same bytes.
+            var encoded = SFTPPacketCodec.encode(packet)
+            #expect(try SFTPPacketCodec.decodeNext(from: &encoded) == packet)
+        }
+
+        @Test func aFileNameIsTextOnlyWhenItsBytesAreUTF8() {
+            func entry(_ name: [UInt8]) -> SFTPNameEntry {
+                SFTPNameEntry(name: name, longname: "", attributes: SFTPAttributes())
+            }
+            #expect(SFTPNameEntry(filename: "dätä 日本.bin", longname: "", attributes: SFTPAttributes()).filename
+                == "dätä 日本.bin")
+            #expect(entry(Array("plain".utf8)).filename == "plain")
+            #expect(entry([]).filename == "")
+            // A lone continuation byte, a sequence cut short, a surrogate
+            // spelled out in UTF-8, and a byte no UTF-8 has.
+            for bytes: [UInt8] in [[0x80], [0x61, 0xC3], [0xED, 0xA0, 0x80], [0xFF], [0xC0, 0xAF]] {
+                #expect(entry(bytes).filename == nil, "\(bytes)")
+            }
         }
 
         // MARK: Rejecting bad input

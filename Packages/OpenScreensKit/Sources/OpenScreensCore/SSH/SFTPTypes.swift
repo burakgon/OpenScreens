@@ -136,6 +136,19 @@ public struct SFTPAttributes: Hashable, Sendable {
         mode.map { $0 & Self.fileTypeMask == Self.symbolicLinkType } ?? false
     }
 
+    /// What kind of thing the attributes describe, or `nil` when they do not
+    /// say: the kind is part of the mode, and a server may leave the mode
+    /// out.
+    var kind: SFTPFileKind? {
+        guard let mode else { return nil }
+        switch mode & Self.fileTypeMask {
+        case Self.directoryType: return .directory
+        case Self.regularFileType: return .file
+        case Self.symbolicLinkType: return .symbolicLink
+        default: return .other
+        }
+    }
+
     /// The permission bits alone (`rwxrwxrwx` plus set-user-ID, set-group-ID
     /// and sticky), without the kind of file.
     public var permissions: UInt16? {
@@ -158,6 +171,55 @@ public struct SFTPAttributes: Hashable, Sendable {
     }
 }
 
+/// What kind of thing an entry of a directory is.
+enum SFTPFileKind: Sendable {
+    case directory
+    case file
+    case symbolicLink
+    /// A device, a socket, a pipe: nothing with contents to copy.
+    case other
+}
+
+/// One entry of a remote directory that can be used here: its name is one,
+/// and what it is has been settled, by asking the server where the listing
+/// did not say.
+struct SFTPDirectoryEntry: Sendable {
+    var name: String
+    var attributes: SFTPAttributes
+    var kind: SFTPFileKind
+}
+
+/// What a server's listing of one directory came to.
+struct SFTPDirectoryContents: Sendable {
+    var entries: [SFTPDirectoryEntry]
+    /// How many entries were left out because of their names; see
+    /// ``SFTPListing/unusableNameCount``.
+    var unusableNameCount: Int
+}
+
+/// The contents of a remote directory, and how much of it had to be left
+/// out.
+public struct SFTPListing: Sendable {
+    /// The entries, sorted by name the way Finder sorts.
+    public let items: [SFTPItem]
+
+    /// How many entries are missing from ``items`` because their names
+    /// cannot be used: the bytes of the name are not UTF-8, so there is no
+    /// text to show or to ask the server for, or the name is not the name of
+    /// one entry, as with a slash in it. `.` and `..` are not counted; they
+    /// are not contents.
+    public let unusableNameCount: Int
+}
+
+/// What a folder download left out.
+public struct SFTPDownloadSummary: Equatable, Sendable {
+    /// How many files and folders were not copied because their names cannot
+    /// be used; see ``SFTPListing/unusableNameCount``. A folder counts once,
+    /// whatever it holds. Symbolic links and special files, which are never
+    /// copied, are not counted.
+    public var unusableNameCount = 0
+}
+
 /// One entry of a remote directory.
 public struct SFTPItem: Identifiable, Hashable, Sendable {
     public let name: String
@@ -177,13 +239,22 @@ public struct SFTPItem: Identifiable, Hashable, Sendable {
     public var id: String { path }
 
     init(name: String, directory: String, attributes: SFTPAttributes) {
-        self.name = name
-        self.path = SFTPPath.join(directory, name)
-        self.isDirectory = attributes.isDirectory
-        self.isSymlink = attributes.isSymbolicLink
-        self.size = Int64(clamping: attributes.size ?? 0)
-        self.modified = attributes.modificationDate
-        self.permissions = attributes.permissions
+        self.init(
+            SFTPDirectoryEntry(name: name, attributes: attributes, kind: attributes.kind ?? .other),
+            directory: directory)
+    }
+
+    /// - Parameter entry: An entry of `directory`. What it is goes by its
+    ///   `kind`, which may have been found out some other way than from its
+    ///   attributes.
+    init(_ entry: SFTPDirectoryEntry, directory: String) {
+        self.name = entry.name
+        self.path = SFTPPath.join(directory, entry.name)
+        self.isDirectory = entry.kind == .directory
+        self.isSymlink = entry.kind == .symbolicLink
+        self.size = Int64(clamping: entry.attributes.size ?? 0)
+        self.modified = entry.attributes.modificationDate
+        self.permissions = entry.attributes.permissions
     }
 }
 

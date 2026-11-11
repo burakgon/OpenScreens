@@ -91,13 +91,19 @@ extension SFTPClient {
     /// A folder that is made here lets the same others in as the remote one
     /// does; the owner can always write to it.
     ///
+    /// A file or folder whose name cannot be used, because it is not UTF-8
+    /// or not the name of one entry, is left out, and the rest is copied.
+    ///
     /// - Parameter progress: Called with the bytes received so far across all
     ///   files and the total found when the directory was first walked.
+    /// - Returns: How much was left out because of its name, for the caller
+    ///   to tell the user: the copy is not complete if anything was.
+    @discardableResult
     public nonisolated func downloadDirectory(
         remotePath: String,
         to localURL: URL,
         progress: SFTPProgressHandler? = nil
-    ) async throws {
+    ) async throws -> SFTPDownloadSummary {
         /// The server's path for what is at `path` inside the directory.
         func remote(_ path: String) -> String {
             path.isEmpty ? remotePath : SFTPPath.join(remotePath, path)
@@ -120,6 +126,7 @@ extension SFTPClient {
         let root = try await entryIfPresent(at: remotePath, followingSymlinks: true)
         var folders = [(path: "", permissions: root?.copiedFolderPermissions)]
         var files: [String] = []
+        var summary = SFTPDownloadSummary()
         var total: Int64 = 0
         var keptBytes = 0
         var unvisited = [""]
@@ -127,17 +134,21 @@ extension SFTPClient {
         while let folder = unvisited.popLast() {
             try Task.checkCancellation()
             let localFolder = SFTPPath.LocalFolder(try local(folder))
-            for entry in try await entries(of: remote(folder)) {
+            let contents = try await entries(of: remote(folder))
+            summary.unusableNameCount += contents.unusableNameCount
+            for entry in contents.entries {
                 // Links and special files are not copied.
-                let isFolder = entry.attributes.isDirectory
-                guard isFolder || entry.attributes.isRegularFile else { continue }
+                guard entry.kind == .directory || entry.kind == .file else { continue }
                 // The listing has already left out names that are not plain
                 // names. This looks at where the name leads instead, so that
                 // nothing is written outside the folder even if that check
                 // and the file system should ever disagree about a name.
-                guard localFolder.url(for: entry.filename) != nil else { continue }
+                guard localFolder.url(for: entry.name) != nil else {
+                    summary.unusableNameCount += 1
+                    continue
+                }
 
-                let path = folder.isEmpty ? entry.filename : folder + "/" + entry.filename
+                let path = folder.isEmpty ? entry.name : folder + "/" + entry.name
                 // A path the local file system has no room for cannot be
                 // copied, and is turned down the way the system would turn
                 // it down. Here rather than later, so that nothing has been
@@ -152,7 +163,7 @@ extension SFTPClient {
                       keptBytes <= Self.maximumListingBytes else {
                     throw SFTPError.tooManyEntries(limit: Self.maximumTreeEntries)
                 }
-                if isFolder {
+                if entry.kind == .directory {
                     folders.append((path, entry.attributes.copiedFolderPermissions))
                     unvisited.append(path)
                 } else {
@@ -182,6 +193,7 @@ extension SFTPClient {
             }
             completed = completed.addingClamped(received)
         }
+        return summary
     }
 
     /// Copies a directory on this device and everything in it to the server.

@@ -38,10 +38,22 @@ public final class FileBrowser: Identifiable {
         public var completed: Int64 = 0
         public var total: Int64?
         public var state = State.waiting
+        /// How many files and folders a finished transfer left out because
+        /// their names cannot be used here.
+        public var skippedCount = 0
 
         public var fraction: Double? {
             guard let total, total > 0 else { return nil }
             return min(1, Double(completed) / Double(total))
+        }
+
+        /// Says that the copy is not complete, when it is not.
+        public var skippedNote: String? {
+            switch skippedCount {
+            case ..<1: nil
+            case 1: "1 item with a name that cannot be shown was skipped."
+            default: "\(skippedCount) items with names that cannot be shown were skipped."
+            }
         }
 
         public var isActive: Bool {
@@ -56,6 +68,10 @@ public final class FileBrowser: Identifiable {
     /// The folder being shown, as the server names it.
     public private(set) var path = ""
     public private(set) var items: [SFTPItem] = []
+    /// How many things in the folder are missing from ``items`` because
+    /// their names cannot be used: they are not text, or not the name of
+    /// one thing. They cannot be opened, copied or deleted from here.
+    public private(set) var unlistedCount = 0
     public private(set) var isLoading = false
     public private(set) var transfers: [Transfer] = []
     /// What went wrong with the last thing the user asked for.
@@ -323,9 +339,10 @@ public final class FileBrowser: Identifiable {
         defer { isLoading = false }
         do {
             let resolved = try await sftp.realPath(newPath)
-            let listed = try await sftp.list(resolved)
+            let listed = try await sftp.listing(of: resolved)
             path = resolved
-            listing = listed
+            listing = listed.items
+            unlistedCount = listed.unusableNameCount
             applyListing()
         } catch {
             report(error, doing: "open that folder")
@@ -340,6 +357,19 @@ public final class FileBrowser: Identifiable {
                 if a.isDirectory != b.isDirectory { return a.isDirectory }
                 return a.name.localizedStandardCompare(b.name) == .orderedAscending
             }
+    }
+
+    /// Says that the folder holds more than is shown, when it does.
+    public var unlistedNote: String? {
+        Self.unlistedNote(for: unlistedCount)
+    }
+
+    static func unlistedNote(for count: Int) -> String? {
+        switch count {
+        case ..<1: nil
+        case 1: "1 item with a name that cannot be shown is not listed."
+        default: "\(count) items with names that cannot be shown are not listed."
+        }
     }
 
     private func report(_ error: any Error, doing what: String) {
@@ -412,11 +442,25 @@ public final class FileBrowser: Identifiable {
             try await sftp.remove(item.path)
             return
         }
-        for child in try await sftp.list(item.path) where child.name != "." && child.name != ".." {
+        let contents = try await sftp.listing(of: item.path)
+        for child in contents.items where child.name != "." && child.name != ".." {
             try Task.checkCancellation()
             try await remove(child, using: sftp)
         }
+        // What cannot be named cannot be deleted, and the folder is not
+        // empty without it. Say so, in place of the server's "failure".
+        guard contents.unusableNameCount == 0 else {
+            throw UndeletableContents(folder: item.name)
+        }
         try await sftp.removeDirectory(item.path)
+    }
+
+    private struct UndeletableContents: LocalizedError {
+        let folder: String
+
+        var errorDescription: String? {
+            "“\(folder)” holds items with names that cannot be shown, which can only be deleted on the computer itself."
+        }
     }
 
     // MARK: - Transfers
@@ -486,15 +530,19 @@ public final class FileBrowser: Identifiable {
                 }
             }
             var outcome = Transfer.State.finished
+            var skipped = 0
             do {
-                try await Self.perform(work, using: sftp, progress: progress)
+                skipped = try await Self.perform(work, using: sftp, progress: progress)
             } catch is CancellationError {
                 outcome = .cancelled
             } catch {
                 outcome = Task.isCancelled ? .cancelled : .failed(error.localizedDescription)
             }
             guard let self else { return }
-            self.update(id) { $0.state = outcome }
+            self.update(id) {
+                $0.state = outcome
+                $0.skippedCount = skipped
+            }
             self.runner = nil
             if case .upload(_, let directory, _) = work, directory == self.path {
                 await self.load(self.path)
@@ -503,9 +551,11 @@ public final class FileBrowser: Identifiable {
         }
     }
 
+    /// - Returns: How many files and folders were left out because their
+    ///   names cannot be used here.
     private static func perform(
         _ work: Work, using sftp: SFTPClient, progress: @escaping SFTPProgressHandler
-    ) async throws {
+    ) async throws -> Int {
         switch work {
         case .upload(let local, let remoteDirectory, let isDirectory):
             // A file picked or dropped comes with access that has to be
@@ -518,15 +568,17 @@ public final class FileBrowser: Identifiable {
             } else {
                 try await sftp.upload(localURL: local, to: target, progress: progress)
             }
+            return 0
         case .download(let item, let localDirectory):
             let scoped = localDirectory.startAccessingSecurityScopedResource()
             defer { if scoped { localDirectory.stopAccessingSecurityScopedResource() } }
             let target = unusedURL(for: item.name, in: localDirectory)
-            if item.isDirectory {
-                try await sftp.downloadDirectory(remotePath: item.path, to: target, progress: progress)
-            } else {
+            guard item.isDirectory else {
                 try await sftp.download(remotePath: item.path, to: target, progress: progress)
+                return 0
             }
+            return try await sftp.downloadDirectory(
+                remotePath: item.path, to: target, progress: progress).unusableNameCount
         }
     }
 

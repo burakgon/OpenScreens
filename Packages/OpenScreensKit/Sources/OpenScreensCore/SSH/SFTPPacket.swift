@@ -26,11 +26,35 @@ struct SFTPOpenFlags: OptionSet, Hashable, Sendable {
 
 /// One entry of an `SSH_FXP_NAME` reply.
 struct SFTPNameEntry: Equatable, Sendable {
-    var filename: String
+    /// The entry's name, byte for byte as the server sent it. To a server a
+    /// name is bytes. That they are UTF-8 is a convention, kept by whoever
+    /// made the file, and a name from another age or another system may not
+    /// keep it.
+    var name: [UInt8]
     /// The entry as `ls -l` would print it. For display only; its format is
     /// up to the server.
     var longname: String
     var attributes: SFTPAttributes
+
+    init(name: [UInt8], longname: String, attributes: SFTPAttributes) {
+        self.name = name
+        self.longname = longname
+        self.attributes = attributes
+    }
+
+    init(filename: String, longname: String, attributes: SFTPAttributes) {
+        self.init(name: Array(filename.utf8), longname: longname, attributes: attributes)
+    }
+
+    /// The name as text, or `nil` when its bytes are not UTF-8.
+    ///
+    /// Such a name is not patched up into something that can be shown. What
+    /// came of that would be a different name, which the server does not
+    /// know the entry by: asking for it finds nothing, or finds something
+    /// else.
+    var filename: String? {
+        String(validating: name, as: UTF8.self)
+    }
 }
 
 /// A protocol extension the server advertises in `SSH_FXP_VERSION`.
@@ -241,7 +265,7 @@ enum SFTPPacketCodec {
             buffer.writeHeader(.name, id)
             buffer.writeInteger(UInt32(clamping: entries.count))
             for entry in entries {
-                buffer.writeLengthPrefixed(entry.filename)
+                buffer.writeLengthPrefixed(entry.name)
                 buffer.writeLengthPrefixed(entry.longname)
                 buffer.writeAttributes(entry.attributes)
             }
@@ -403,11 +427,11 @@ enum SFTPPacketCodec {
             // the claim, decide how much is allocated.
             entries.reserveCapacity(min(Int(count), body.readableBytes / 12))
             for _ in 0..<count {
-                guard let filename = body.readLengthPrefixedText(),
+                guard let name = body.readLengthPrefixed(),
                       let longname = body.readLengthPrefixedText(),
                       let attributes = body.readAttributes() else { return nil }
                 entries.append(SFTPNameEntry(
-                    filename: filename, longname: longname, attributes: attributes))
+                    name: [UInt8](name.readableBytesView), longname: longname, attributes: attributes))
             }
             return .name(id: id, entries: entries)
         case .attributes:
@@ -454,9 +478,10 @@ extension ByteBuffer {
         return readSlice(length: Int(length))
     }
 
-    /// Reads an SFTP `string` holding text. File names are UTF-8 by
-    /// convention only, so bytes that are not valid UTF-8 are replaced, not
-    /// refused.
+    /// Reads an SFTP `string` holding text that is only shown or compared,
+    /// such as a server's message. Bytes that are not valid UTF-8 are
+    /// replaced, not refused. The names in a listing are not read this way;
+    /// see ``SFTPNameEntry/name``.
     fileprivate mutating func readLengthPrefixedText() -> String? {
         readLengthPrefixed().map { String(decoding: $0.readableBytesView, as: UTF8.self) }
     }

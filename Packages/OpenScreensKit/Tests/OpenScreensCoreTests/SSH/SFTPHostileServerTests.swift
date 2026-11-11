@@ -1062,6 +1062,166 @@ extension SSHTests {
                 await client.close()
             }
         }
+
+        // MARK: Names that are not text, and entries of no stated kind
+
+        @Test func namesThatCannotBeUsedAreLeftOutAndCounted() async throws {
+            let latin1 = SFTPNameEntry(
+                name: Array("caf".utf8) + [0xE9] + Array(".txt".utf8), longname: "",
+                attributes: SFTPAttributes(size: 5, mode: 0o100644))
+            let folder = SFTPNameEntry(
+                name: [0xFF, 0xFE], longname: "", attributes: SFTPAttributes(mode: 0o040755))
+            let listings = Tally()
+            try await SFTPTestServer.run(script: { request in
+                // The folder's listing, and then its end, by turns.
+                guard case .readdir(let id, _) = request else { return .serve }
+                return listings.next().isMultiple(of: 2)
+                    ? .reply([.status(id: id, code: .endOfFile, message: "", language: "")])
+                    : .reply([.name(id: id, entries: [
+                        Self.entry("."), Self.entry(".."),
+                        Self.entry("ok.txt"), latin1, folder, Self.entry("../\u{0301}up"),
+                        // A link is not copied, and is not a name gone wrong.
+                        Self.entry("link", mode: 0o120777),
+                    ])])
+            }) { server in
+                let local = try TemporaryDirectory()
+                server.volume.addFile("ok.txt", contents: Data("ok".utf8))
+                let client = try await server.connect()
+                let sftp = try await client.openSFTP()
+
+                // Two names that are not text and one that is not a name;
+                // `.` and `..` are not contents and are not missed.
+                let listing = try await sftp.listing(of: "/")
+                #expect(listing.items.map(\.name) == ["link", "ok.txt"])
+                #expect(listing.unusableNameCount == 3)
+                #expect(try await sftp.list("/").map(\.name) == ["link", "ok.txt"])
+
+                // The rest of the folder is copied, and the caller is told
+                // that the copy is short of three.
+                let copy = local.file("copy")
+                let summary = try await sftp.downloadDirectory(remotePath: "/", to: copy)
+                #expect(summary == SFTPDownloadSummary(unusableNameCount: 3))
+                #expect(try Self.names(in: copy) == ["ok.txt"])
+                // Nothing was asked for under a name the server never gave.
+                #expect(Self.pathRequests(server.requests).filter { $0.hasPrefix("open") } == ["open /ok.txt"])
+                await client.close()
+            }
+        }
+
+        @Test func aFolderOfUsableNamesIsCopiedInFull() async throws {
+            try await SFTPTestServer.run { server in
+                let local = try TemporaryDirectory()
+                server.volume.addFile("ok.txt", contents: Data("ok".utf8))
+                let client = try await server.connect()
+                let sftp = try await client.openSFTP()
+                #expect(try await sftp.listing(of: "/").unusableNameCount == 0)
+                #expect(try await sftp.downloadDirectory(remotePath: "/", to: local.file("copy"))
+                    == SFTPDownloadSummary())
+                await client.close()
+            }
+        }
+
+        @Test func aStartingFolderWhoseNameIsNotTextIsAnError() async throws {
+            try await SFTPTestServer.run(script: { request in
+                guard case .realpath(let id, _) = request else { return .serve }
+                return .reply([.name(id: id, entries: [SFTPNameEntry(
+                    name: Array("/home/caf".utf8) + [0xE9], longname: "", attributes: SFTPAttributes())])])
+            }) { server in
+                let client = try await server.connect()
+                let sftp = try await client.openSFTP()
+                await #expect(throws: SFTPError.invalidResponse("a path that is not UTF-8")) {
+                    try await sftp.homeDirectory()
+                }
+                await client.close()
+            }
+        }
+
+        /// A listing may leave out what its entries are. Asking about each
+        /// one settles it.
+        @Test func entriesAListingDoesNotDescribeAreAskedAbout() async throws {
+            try await SFTPTestServer.run { server in
+                let local = try TemporaryDirectory()
+                server.volume.addFile("file.txt", contents: Data("hello".utf8)) { $0.listsKind = false }
+                let folder = server.volume.addDirectory("folder") { $0.listsKind = false }
+                server.volume.addFile("inner.txt", in: folder, contents: Data("inner".utf8))
+                server.volume.addFile("plain.txt", contents: Data("plain".utf8))
+
+                let client = try await server.connect()
+                let sftp = try await client.openSFTP()
+                let listing = try await sftp.list("/")
+                #expect(listing.map(\.name) == ["file.txt", "folder", "plain.txt"])
+                #expect(listing.map(\.isDirectory) == [false, true, false])
+                #expect(listing.map(\.size) == [5, 0, 5])
+                // Only what the listing left open was asked about.
+                #expect(Self.pathRequests(server.requests).sorted() == ["lstat /file.txt", "lstat /folder"])
+
+                let copy = local.file("copy")
+                try await sftp.downloadDirectory(remotePath: "/", to: copy)
+                #expect(try Self.names(in: copy) == ["file.txt", "folder", "plain.txt"])
+                #expect(try Data(contentsOf: copy.appending(path: "folder/inner.txt")) == Data("inner".utf8))
+                await client.close()
+            }
+        }
+
+        @Test func aLongListingThatDescribesNothingIsSettledEntryByEntry() async throws {
+            try await SFTPTestServer.run { server in
+                // More entries than are asked about at once, files and
+                // folders by turns.
+                let count = 5 * SFTPClient.transferPipelineDepth + 3
+                for index in 0..<count {
+                    if index.isMultiple(of: 2) {
+                        server.volume.addFile("entry-\(index)", contents: Data(count: index)) { $0.listsKind = false }
+                    } else {
+                        server.volume.addDirectory("entry-\(index)") { $0.listsKind = false }
+                    }
+                }
+                let client = try await server.connect()
+                let sftp = try await client.openSFTP()
+                let listing = try await sftp.list("/")
+                #expect(listing.count == count)
+                for item in listing {
+                    let index = try #require(Int(item.name.dropFirst("entry-".count)))
+                    #expect(item.isDirectory == !index.isMultiple(of: 2), "\(item.name)")
+                    #expect(item.size == (index.isMultiple(of: 2) ? Int64(index) : 0), "\(item.name)")
+                }
+                await client.close()
+            }
+        }
+
+        /// A server may not say what an entry is even when asked. Whether it
+        /// can be opened as a folder is then all there is to go by.
+        @Test func entriesTheServerWillNotDescribeAreTriedAsFolders() async throws {
+            try await SFTPTestServer.run { server in
+                let local = try TemporaryDirectory()
+                server.volume.addFile("file.txt", contents: Data("hello".utf8)) {
+                    $0.listsKind = false
+                    $0.statsKind = false
+                }
+                let folder = server.volume.addDirectory("folder") {
+                    $0.listsKind = false
+                    $0.statsKind = false
+                }
+                server.volume.addFile("inner.txt", in: folder, contents: Data("inner".utf8)) {
+                    $0.listsKind = false
+                    $0.statsKind = false
+                }
+
+                let client = try await server.connect()
+                let sftp = try await client.openSFTP()
+                let listing = try await sftp.list("/")
+                #expect(listing.map(\.name) == ["file.txt", "folder"])
+                #expect(listing.map(\.isDirectory) == [false, true])
+
+                let copy = local.file("copy")
+                try await sftp.downloadDirectory(remotePath: "/", to: copy)
+                #expect(try Self.names(in: copy) == ["file.txt", "folder"])
+                #expect(try Data(contentsOf: copy.appending(path: "file.txt")) == Data("hello".utf8))
+                #expect(try Data(contentsOf: copy.appending(path: "folder/inner.txt")) == Data("inner".utf8))
+                // Trying left nothing open.
+                #expect(await server.waitForRequests { _ in server.volume.openHandleCount == 0 })
+                await client.close()
+            }
+        }
     }
 }
 

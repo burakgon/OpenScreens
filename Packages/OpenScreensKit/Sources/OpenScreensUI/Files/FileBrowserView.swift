@@ -211,6 +211,12 @@ public struct FileBrowserView: View {
                     }
                     #endif
             }
+            if let note = browser.unlistedNote {
+                Label(note, systemImage: "eye.slash")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .selectionDisabled()
+            }
         }
         #if os(macOS)
         .contextMenu(forSelectionType: SFTPItem.ID.self) { _ in
@@ -228,7 +234,7 @@ public struct FileBrowserView: View {
             return true
         }
         .overlay {
-            if browser.items.isEmpty, !browser.isLoading {
+            if browser.items.isEmpty, browser.unlistedCount == 0, !browser.isLoading {
                 ContentUnavailableView(
                     "Nothing Here",
                     systemImage: "folder",
@@ -448,9 +454,18 @@ private struct TransferList: View {
                     .progressViewStyle(.linear)
             }
         case .finished:
-            Text(transfer.isUpload ? "Uploaded" : "Downloaded")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            let done = transfer.isUpload ? "Uploaded" : "Downloaded"
+            if let note = transfer.skippedNote {
+                // The copy is there, and it is not all of it.
+                Text(done + ". " + note)
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .lineLimit(2)
+            } else {
+                Text(done)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         case .cancelled:
             Text("Stopped")
                 .font(.caption)
