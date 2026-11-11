@@ -242,7 +242,9 @@ public actor SFTPClient {
                 let reply = try await exchange { .readdir(id: $0, handle: handle) }
                 switch reply {
                 case .name(_, let batch):
-                    entries.append(contentsOf: batch.filter { Self.isUsableName($0.filename) })
+                    // `.` and `..` are not contents, and anything else that
+                    // is not one plain name cannot be used as one.
+                    entries.append(contentsOf: batch.filter { SFTPPath.isUsableName($0.filename) })
                 case .status(_, .endOfFile, _, _):
                     break reading
                 default:
@@ -255,15 +257,6 @@ public actor SFTPClient {
         }
         try await close(handle)
         return entries
-    }
-
-    /// Whether a name from a listing can be used as one. `.` and `..` are not
-    /// contents, and a name with a slash or a NUL in it is not a name: taken
-    /// at face value it would let a server point a download outside the
-    /// folder it was aimed at.
-    private static func isUsableName(_ name: String) -> Bool {
-        !name.isEmpty && name != "." && name != ".."
-            && !name.contains("/") && !name.contains("\0")
     }
 
     /// What the server knows about the file at `path`.

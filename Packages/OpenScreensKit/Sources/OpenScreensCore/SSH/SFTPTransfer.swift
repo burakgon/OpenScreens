@@ -70,8 +70,14 @@ extension SFTPClient {
             try Task.checkCancellation()
             try LocalFile.createDirectory(at: directory.localURL)
             for entry in try await entries(of: directory.remotePath) {
+                // The listing has already left out names that are not plain
+                // names. This looks at where the name leads instead, so that
+                // nothing is written outside the folder even if that check
+                // and the file system should ever disagree about a name.
+                guard let childURL = SFTPPath.localURL(for: entry.filename, in: directory.localURL) else {
+                    continue
+                }
                 let childPath = SFTPPath.join(directory.remotePath, entry.filename)
-                let childURL = directory.localURL.appending(path: entry.filename)
                 if entry.attributes.isDirectory {
                     unvisited.append((childPath, childURL))
                 } else if entry.attributes.isRegularFile {

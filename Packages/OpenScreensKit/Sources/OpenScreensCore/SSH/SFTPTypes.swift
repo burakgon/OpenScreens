@@ -172,10 +172,70 @@ public typealias SFTPProgressHandler = @Sendable (_ completed: Int64, _ total: I
 
 /// Remote paths are plain strings with `/` separators, whatever the device
 /// this code runs on uses.
-enum SFTPPath {
+public enum SFTPPath {
     static func join(_ directory: String, _ name: String) -> String {
         if directory.isEmpty { return name }
         return directory.hasSuffix("/") ? directory + name : directory + "/" + name
     }
 
+    /// Whether `name` can stand for one entry of a folder, on the server or
+    /// in the local folder a remote entry is copied to.
+    ///
+    /// It has to be something other than `.` and `..`, and may hold neither a
+    /// slash nor a NUL. The name is looked at byte by byte, which is how a
+    /// file system reads it. Looking at characters is not enough: a slash
+    /// followed by a combining mark or an invisible joiner is one character
+    /// that is not "/", and the slash in it still separates folders. Taken at
+    /// face value, a name like that lets a server put a download outside the
+    /// folder it was aimed at.
+    public static func isUsableName(_ name: String) -> Bool {
+        let bytes = name.utf8
+        guard !bytes.isEmpty, !bytes.elementsEqual(".".utf8), !bytes.elementsEqual("..".utf8) else {
+            return false
+        }
+        return !bytes.contains { $0 == UInt8(ascii: "/") || $0 == 0 }
+    }
+
+    /// Where the entry called `name` goes in the local folder `directory`.
+    ///
+    /// Two things have to hold, and each is checked without relying on the
+    /// other. The name is usable (``isUsableName(_:)``). And the place the
+    /// name leads to, once every `.` and `..` is worked out, is the entry of
+    /// that name directly inside `directory`: not above it, not deeper, and
+    /// not under a name the system made out of the one given.
+    ///
+    /// - Returns: `nil` when either does not hold.
+    public static func localURL(for name: String, in directory: URL) -> URL? {
+        guard isUsableName(name) else { return nil }
+        let url = directory.appending(path: name)
+        return leads(url, to: name, in: directory) ? url : nil
+    }
+
+    /// Whether `url` is the entry called `name` directly inside `directory`.
+    static func leads(_ url: URL, to name: String, in directory: URL) -> Bool {
+        resolvedComponents(of: url) == resolvedComponents(of: directory) + [name]
+    }
+
+    /// The components of a local path with `.` and `..` worked out.
+    ///
+    /// This is done on the text alone. Foundation's own standardizing asks
+    /// the file system on the way, and gives a folder that exists and a file
+    /// in it that does not exist yet two different spellings.
+    private static func resolvedComponents(of url: URL) -> [String] {
+        var resolved: [String] = []
+        for component in url.pathComponents {
+            switch component {
+            case ".":
+                continue
+            case "..":
+                // The first component is the root, which has nothing above it.
+                if resolved.count > 1 {
+                    resolved.removeLast()
+                }
+            default:
+                resolved.append(component)
+            }
+        }
+        return resolved
+    }
 }

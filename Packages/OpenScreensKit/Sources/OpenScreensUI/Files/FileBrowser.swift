@@ -351,9 +351,10 @@ public final class FileBrowser: Identifiable {
         directory.hasSuffix("/") ? directory + name : directory + "/" + name
     }
 
-    /// A name can be used as it is: not empty, not a path.
+    /// A name can be used as it is: not empty, not a path. The rule is the
+    /// one listings and downloads go by.
     static func isUsableName(_ name: String) -> Bool {
-        !name.isEmpty && name != "." && name != ".." && !name.contains("/") && !name.contains("\0")
+        SFTPPath.isUsableName(name)
     }
 
     // MARK: - Changes
@@ -533,8 +534,15 @@ public final class FileBrowser: Identifiable {
     /// `name 2`, `name 3`… when that is taken. A remote name is not trusted
     /// to be a plain file name.
     static func unusedURL(for name: String, in directory: URL) -> URL {
-        let safe = name.replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "\0", with: "")
-        let plain = safe.isEmpty || safe == "." || safe == ".." ? "Download" : safe
+        // Slashes and NULs are replaced one code point at a time. Searching
+        // the text for "/" would step over a slash that has a combining mark
+        // after it, and leave it in the name.
+        var safe = String.UnicodeScalarView()
+        for scalar in name.unicodeScalars where scalar != "\0" {
+            safe.append(scalar == "/" ? "_" : scalar)
+        }
+        // Whatever is left has to lead into the folder and nowhere else.
+        let plain = SFTPPath.localURL(for: String(safe), in: directory) == nil ? "Download" : String(safe)
         let base = (plain as NSString).deletingPathExtension
         let ext = (plain as NSString).pathExtension
         var candidate = directory.appending(path: plain)

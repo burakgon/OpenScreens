@@ -16,8 +16,13 @@ struct FileBrowserTests {
     }
 
     /// The server names the files. A name must not be able to put a download
-    /// anywhere but the folder the user chose.
-    @Test(arguments: ["../../evil", "/etc/passwd", "a/b/c.txt", "..", ".", "", "nul\0byte"])
+    /// anywhere but the folder the user chose, and that includes a slash with
+    /// a combining mark or an invisible character after it, which is not the
+    /// character "/" and still separates folders.
+    @Test(arguments: [
+        "../../evil", "/etc/passwd", "a/b/c.txt", "..", ".", "", "nul\0byte",
+        "../\u{0301}evil", "../\u{200D}evil", "a/\u{0301}b", "/\u{0301}", "\u{FEFF}/../evil", "..\0",
+    ])
     func aRemoteNameCannotLeaveTheChosenFolder(name: String) throws {
         let directory = try scratchDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -29,6 +34,7 @@ struct FileBrowserTests {
         #expect(target.lastPathComponent != "..")
         #expect(target.lastPathComponent != ".")
         #expect(!target.lastPathComponent.contains("\0"))
+        #expect(SFTPPath.isUsableName(target.lastPathComponent))
     }
 
     @Test func aDownloadNeverReplacesWhatIsAlreadyThere() throws {
@@ -51,6 +57,7 @@ struct FileBrowserTests {
     @Test(arguments: [
         ("Projects", true), ("a b.txt", true), (".hidden", true), ("日本", true),
         ("", false), (".", false), ("..", false), ("a/b", false), ("/", false), ("a\0b", false),
+        ("a/\u{0301}b", false), ("../\u{200D}up", false), ("e\u{0301}", true), ("..\u{200D}", true),
     ])
     func onlyAPlainNameCanBeGivenToAFolderOrARename(name: String, isUsable: Bool) {
         #expect(FileBrowser.isUsableName(name) == isUsable)
