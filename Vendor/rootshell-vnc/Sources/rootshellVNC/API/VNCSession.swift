@@ -1201,6 +1201,15 @@ public final class VNCSession {
     /// resolve through Retry, and nothing that merely happens to the app
     /// afterwards, an app switch included, may undo them.
     private var automaticRecoveryDeclined = false
+
+    /// Whether the person at the remote computer ended this session.
+    ///
+    /// An Apple server says so just before it closes the connection. The
+    /// session then stays closed: reconnecting on its own would put the
+    /// viewer straight back in front of someone who has just sent it away.
+    /// A deliberate ``connect(credentials:)`` or ``retryConnection()``
+    /// clears it.
+    public private(set) var endedByRemoteUser = false
     #if canImport(UIKit)
     @ObservationIgnored
     private var backgroundLifecycleTask: Task<Void, Never>?
@@ -1305,6 +1314,7 @@ public final class VNCSession {
         consecutiveMediaBootstrapReconnects = 0
         consecutiveMediaStreamRestarts = 0
         automaticRecoveryDeclined = false
+        endedByRemoteUser = false
         highPerformanceFallbackReason = nil
         connectionState = .connecting
         connectionPhaseDescription = String(localized: "Opening connection…", bundle: .module)
@@ -1456,6 +1466,7 @@ public final class VNCSession {
         // The user asking for a retry is the resolution the declined states
         // were waiting for.
         automaticRecoveryDeclined = false
+        endedByRemoteUser = false
         scheduleReconnect(immediate: true)
     }
 
@@ -1482,6 +1493,7 @@ public final class VNCSession {
         consecutiveMediaBootstrapReconnects = 0
         consecutiveMediaStreamRestarts = 0
         automaticRecoveryDeclined = false
+        endedByRemoteUser = false
 
         // Mirror the proven media-bootstrap recovery path: close the old
         // transport while the reconnect task performs ordered cleanup and
@@ -2128,6 +2140,12 @@ public final class VNCSession {
         case .appleRemoteSessionState(let state):
             noteAppleServerProtocolObserved()
             handleAppleRemoteSessionState(state)
+
+        case .appleStateChange(let change):
+            if change.code == AppleStateChange.localUserClosedConnection {
+                logger.info("The session was ended at the remote computer")
+                endedByRemoteUser = true
+            }
 
         case .desktopLayout(let layout):
             await updateRemoteDisplayRegions(layout.screens)
@@ -2871,7 +2889,12 @@ public final class VNCSession {
         // reconnect when the retired transport reports its shutdown.
         if reconnectTask != nil { return }
 
+        if endedByRemoteUser {
+            // Not a fault to recover from, now or on a later foreground edge.
+            automaticRecoveryDeclined = true
+        }
         guard !intentionallyDisconnected,
+              !endedByRemoteUser,
               hasEstablishedConnection,
               activeCredentials != nil,
               configuration.reconnectionPolicy.isEnabled,

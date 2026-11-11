@@ -248,6 +248,36 @@ final class TransportSessionClipboardTests: XCTestCase {
         await session.disconnect()
     }
 
+    /// Every state change but the idle notice is passed on, so a host can
+    /// tell a session ended at the other computer from one that was lost.
+    func testAppleStateChangesArePublishedExceptTheIdleNotice() async throws {
+        let (session, connection) = try await connectAppleServer()
+        let recorder = EventRecorder()
+        recorder.record(session)
+
+        await connection.enqueueServerBytes(Self.stateChange(AppleStateChange.idle))
+        await connection.enqueueServerBytes(
+            Self.stateChange(AppleStateChange.localUserClosedConnection))
+        let published = await Self.waitUntil {
+            recorder.contains {
+                if case .appleStateChange(let change) = $0 {
+                    change.code == AppleStateChange.localUserClosedConnection
+                } else {
+                    false
+                }
+            }
+        }
+        XCTAssertTrue(published)
+        XCTAssertFalse(recorder.contains {
+            if case .appleStateChange(let change) = $0 {
+                change.code == AppleStateChange.idle
+            } else {
+                false
+            }
+        })
+        await session.disconnect()
+    }
+
     // MARK: - Helpers
 
     private func connectAppleServer() async throws -> (TransportSession, ScriptedRFBConnection) {

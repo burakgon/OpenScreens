@@ -228,6 +228,9 @@ public enum SessionEvent: Sendable {
     /// Apple Login Window and lock-screen state changed.
     case appleRemoteSessionState(AppleRemoteSessionState)
 
+    /// The server reported a state change other than "nothing happened".
+    case appleStateChange(AppleStateChange)
+
     /// Standard RFB multi-screen layout received.
     case desktopLayout(ExtendedDesktopSizePayload)
 
@@ -3014,11 +3017,10 @@ public actor TransportSession {
     /// things, among them a notice every two seconds that nothing happened;
     /// only a changed pasteboard is a reason to fetch the pasteboard.
     private func noteAppleStateChange(_ change: AppleStateChange?) async {
-        guard let change else { return }
+        guard let change, change.code != AppleStateChange.idle else { return }
+        continuation?.yield(.appleStateChange(change))
         guard change.announcesPasteboard else {
-            if change.code != AppleStateChange.idle {
-                log.debug("Apple state change \(change.code)")
-            }
+            log.debug("Apple state change \(change.code)")
             return
         }
         guard sharedClipboardEnabled else { return }
