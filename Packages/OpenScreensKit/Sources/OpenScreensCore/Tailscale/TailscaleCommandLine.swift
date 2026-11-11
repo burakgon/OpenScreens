@@ -29,8 +29,8 @@ enum TailscaleCommandLine {
 
     /// How much a tool may print, both streams together, before it is
     /// stopped. Everything it prints is held in memory, so there has to be
-    /// an end to it; the status of a tailnet of ten thousand devices is
-    /// well within this.
+    /// an end to it. Status comes to about a kilobyte a device, so a
+    /// tailnet of ten thousand devices still fits.
     static let outputLimit = 16 * 1024 * 1024
 
     /// How long the output streams may stay open after the tool has exited
