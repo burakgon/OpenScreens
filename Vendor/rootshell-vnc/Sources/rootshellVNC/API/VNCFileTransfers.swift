@@ -280,7 +280,10 @@ public final class VNCFileTransferController {
     // MARK: - Upload
 
     /// A file drag entered the remote screen at framebuffer `x`, `y`.
-    func beginUploadDrag(names: [String], x: UInt16, y: UInt16) -> Bool {
+    ///
+    /// Public, with the calls that follow a drag, for a host that draws the
+    /// remote picture in views of its own and so receives the drag itself.
+    public func beginUploadDrag(names: [String], x: UInt16, y: UInt16) -> Bool {
         guard canUpload, activeUploadDrag == nil, !names.isEmpty, let session else { return false }
         let handle = makeHandle()
         let folder = FileManager.default.temporaryDirectory
@@ -310,14 +313,14 @@ public final class VNCFileTransferController {
         return true
     }
 
-    func moveUploadDrag(x: UInt16, y: UInt16) {
+    public func moveUploadDrag(x: UInt16, y: UInt16) {
         guard activeUploadDrag != nil else { return }
         lastUploadDragPoint = (x, y)
         session?.sendPointerEvent(buttonMask: TouchInputHandler.leftButton, x: x, y: y)
     }
 
     /// The drag left the remote screen or ended without a drop here.
-    func cancelUploadDrag() {
+    public func cancelUploadDrag() {
         guard let id = activeUploadDrag else { return }
         activeUploadDrag = nil
         let point = lastUploadDragPoint
@@ -329,7 +332,7 @@ public final class VNCFileTransferController {
         transfers.removeAll { $0.id == id }
     }
 
-    func dropUpload(itemProviders: [NSItemProvider], x: UInt16, y: UInt16) {
+    public func dropUpload(itemProviders: [NSItemProvider], x: UInt16, y: UInt16) {
         guard let id = activeUploadDrag, let job = uploads[id] else { return }
         activeUploadDrag = nil
         session?.sendPointerEvent(buttonMask: TouchInputHandler.leftButton, x: x, y: y)
@@ -359,8 +362,33 @@ public final class VNCFileTransferController {
         }
     }
 
+    /// Ends an upload drag with files that are already on disk, as a drag
+    /// from the Finder delivers them. They are read where they are: nothing
+    /// is copied aside first, and nothing of the user's is removed after.
+    public func dropUpload(fileURLs: [URL], x: UInt16, y: UInt16) {
+        guard let id = activeUploadDrag, let job = uploads[id] else { return }
+        activeUploadDrag = nil
+        session?.sendPointerEvent(buttonMask: TouchInputHandler.leftButton, x: x, y: y)
+        session?.sendPointerEvent(buttonMask: 0, x: x, y: y)
+        guard !fileURLs.isEmpty else {
+            finishUpload(id, state: .failed(String(
+                localized: "The dropped items couldn't be read.", bundle: .module)))
+            return
+        }
+        update(id) { $0.state = .preparing }
+        job.timeout = Task { [weak self] in
+            try? await Task.sleep(for: Self.dropTimeout)
+            guard !Task.isCancelled else { return }
+            self?.finishUpload(id, state: .failed(String(
+                localized: "The Mac didn't accept the files there. Drop them on a folder or the desktop.",
+                bundle: .module)))
+        }
+        job.staged = fileURLs
+        startUploadIfReady(job)
+    }
+
     /// Uploads local items straight into a folder on the Mac, without a drag.
-    func upload(_ urls: [URL], toRemoteFolder destination: String) {
+    public func upload(_ urls: [URL], toRemoteFolder destination: String) {
         let transfer = VNCFileTransfer(
             id: UUID(),
             direction: .upload,
@@ -627,7 +655,7 @@ public final class VNCFileTransferController {
     // MARK: - Staging dropped items
 
     /// A name the drop session can show before any file is loaded.
-    nonisolated static func suggestedName(for provider: NSItemProvider) -> String? {
+    public nonisolated static func suggestedName(for provider: NSItemProvider) -> String? {
         guard let type = fileType(for: provider) else { return nil }
         var name = provider.suggestedName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if name.isEmpty { name = String(localized: "File", bundle: .module) }
@@ -639,7 +667,7 @@ public final class VNCFileTransferController {
     }
 
     /// The first file-backed type; text snippets without a name are skipped.
-    nonisolated static func fileType(for provider: NSItemProvider) -> String? {
+    public nonisolated static func fileType(for provider: NSItemProvider) -> String? {
         provider.registeredTypeIdentifiers.first { identifier in
             guard let type = UTType(identifier) else { return false }
             if type.conforms(to: .directory) { return true }
