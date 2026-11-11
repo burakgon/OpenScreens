@@ -29,6 +29,11 @@ public struct StoredSSHKey: Identifiable, Hashable, Sendable {
 /// Each key is one entry under the account `sshkey.<id>`, so keys travel with
 /// iCloud Keychain like saved passwords do, and deleting one cannot disturb
 /// another.
+///
+/// In the keychain, a key saved from now on can be read only while the
+/// device is unlocked. A key is used to sign in when its owner starts a
+/// connection, never behind a locked screen, so nothing is lost by that.
+/// Keys saved before keep the looser setting they were saved with.
 public struct SSHKeyStore: Sendable {
     private static let accountPrefix = "sshkey."
 
@@ -44,24 +49,38 @@ public struct SSHKeyStore: Sendable {
 
     private let storage: any SecretStorage
 
-    public init(storage: any SecretStorage = KeychainStorage()) {
+    /// Where keys are kept unless a store is told otherwise: the keychain
+    /// the passwords are in, with new keys readable only while the device
+    /// is unlocked.
+    public static var keychain: KeychainStorage {
+        KeychainStorage(accessibility: .whenUnlocked)
+    }
+
+    public init(storage: any SecretStorage = SSHKeyStore.keychain) {
         self.storage = storage
     }
 
     // MARK: Reading
 
     /// Every saved key, oldest first.
-    public func keys() -> [StoredSSHKey] {
-        storage.accounts()
+    ///
+    /// - Throws: When the storage could not be read, which says nothing
+    ///   about whether there are keys in it.
+    public func keys() throws -> [StoredSSHKey] {
+        try storage.accounts()
             .filter { $0.hasPrefix(Self.accountPrefix) }
-            .compactMap { record(account: $0) }
+            .compactMap { try record(account: $0) }
             .compactMap { Self.describe($0) }
             .sorted { ($0.createdAt, $0.name) < ($1.createdAt, $1.name) }
     }
 
-    /// The private key saved under `id`, ready to sign in with.
-    public func privateKey(for id: UUID) -> SSHPrivateKey? {
-        guard let record = record(account: Self.account(id)) else { return nil }
+    /// The private key saved under `id`, ready to sign in with, or `nil`
+    /// when no key is saved under it.
+    ///
+    /// - Throws: When the storage could not be read. The key may well be
+    ///   there.
+    public func privateKey(for id: UUID) throws -> SSHPrivateKey? {
+        guard let record = try record(account: Self.account(id)) else { return nil }
         return try? SSHPrivateKey(openSSH: record.privateKey, passphrase: nil)
     }
 
@@ -79,11 +98,12 @@ public struct SSHKeyStore: Sendable {
         return Self.description(of: record, key: key)
     }
 
-    /// Renames a saved key.
+    /// Renames a saved key. If the new name cannot be saved, the key stays
+    /// as it was, under its old name.
     /// - Returns: The updated description, or `nil` when there is no such key.
     @discardableResult
     public func rename(_ id: UUID, to name: String) throws -> StoredSSHKey? {
-        guard var record = record(account: Self.account(id)) else { return nil }
+        guard var record = try record(account: Self.account(id)) else { return nil }
         record.name = name
         try write(record)
         return Self.describe(record)
@@ -101,8 +121,10 @@ public struct SSHKeyStore: Sendable {
         accountPrefix + id.uuidString
     }
 
-    private func record(account: String) -> Record? {
-        guard let data = storage.data(account: account) else { return nil }
+    /// The record stored under `account`. `nil` when there is none, and also
+    /// when what is stored there is not a record.
+    private func record(account: String) throws -> Record? {
+        guard let data = try storage.data(account: account) else { return nil }
         return try? Self.decoder.decode(Record.self, from: data)
     }
 

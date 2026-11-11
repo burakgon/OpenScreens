@@ -143,8 +143,10 @@ public final class FileBrowser: Identifiable {
     /// saved name and password are tried before asking.
     private func identity() -> Identity {
         let username = entered?.username ?? savedUsername
+        // A key that cannot be read is passed over like one that is not
+        // there, and the user is asked to sign in with a password instead.
         if entered == nil, tunnelsToItself, computer.ssh.authentication == .key,
-           let keyID = computer.ssh.keyID, let key = sshKeys.privateKey(for: keyID), !username.isEmpty {
+           let keyID = computer.ssh.keyID, let key = try? sshKeys.privateKey(for: keyID), !username.isEmpty {
             return .ready(username: username, credential: .key(key))
         }
         let password = entered?.password

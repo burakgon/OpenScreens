@@ -178,6 +178,8 @@ struct SSHKeysSettingsPane: View {
     @Environment(AppModel.self) private var model
 
     @State private var keys: [StoredSSHKey] = []
+    /// Why the keys cannot be shown, when they cannot.
+    @State private var keysProblem: String?
     @State private var hosts: [KnownHostsStore.Entry] = []
     /// Why the list of trusted servers cannot be shown, when it cannot.
     @State private var hostsProblem: String?
@@ -212,7 +214,9 @@ struct SSHKeysSettingsPane: View {
     var body: some View {
         Form {
             Section {
-                if keys.isEmpty {
+                if let keysProblem {
+                    Text("Your keys could not be read from the keychain. \(keysProblem)")
+                } else if keys.isEmpty {
                     Text("No keys yet")
                         .foregroundStyle(.secondary)
                 }
@@ -384,7 +388,13 @@ struct SSHKeysSettingsPane: View {
     }
 
     private func reload() {
-        keys = model.sshKeys.keys()
+        do {
+            keys = try model.sshKeys.keys()
+            keysProblem = nil
+        } catch {
+            keys = []
+            keysProblem = error.localizedDescription
+        }
         do {
             hosts = try model.knownHosts.all()
             hostsProblem = nil

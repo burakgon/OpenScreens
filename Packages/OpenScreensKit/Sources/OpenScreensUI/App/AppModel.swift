@@ -53,7 +53,9 @@ public final class AppModel {
         let knownHosts = isIsolated && !StorageLocation.isIsolated
             ? KnownHostsStore(fileURL: nil)
             : KnownHostsStore()
-        let sshKeys = SSHKeyStore(storage: secrets)
+        // Keys go in the same keychain as the passwords, under the stricter
+        // setting the key store asks for.
+        let sshKeys = isIsolated ? SSHKeyStore(storage: secrets) : SSHKeyStore()
         self.library = library
         self.settings = settings
         self.credentials = credentials

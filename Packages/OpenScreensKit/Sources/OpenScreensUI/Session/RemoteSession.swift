@@ -341,6 +341,9 @@ public final class RemoteSession: Identifiable {
             case .missingKey:
                 failureMessage = "The SSH key chosen for this computer is not on this device. Choose another key, or a password, in the computer's settings."
                 return
+            case .unreadableKey(let reason):
+                failureMessage = "The SSH key chosen for this computer could not be read from the keychain. \(reason)"
+                return
             }
         }
 
@@ -395,6 +398,8 @@ public final class RemoteSession: Identifiable {
         case ready(username: String, credential: SSHCredential)
         case needsSignIn(username: String)
         case missingKey
+        /// The key may be there, but the keychain would not give it up.
+        case unreadableKey(String)
     }
 
     /// Who to be on the SSH server.
@@ -412,9 +417,14 @@ public final class RemoteSession: Identifiable {
 
         switch ssh.authentication {
         case .key:
-            guard let keyID = ssh.keyID, let key = sshKeys.privateKey(for: keyID) else {
-                return .missingKey
+            guard let keyID = ssh.keyID else { return .missingKey }
+            let key: SSHPrivateKey?
+            do {
+                key = try sshKeys.privateKey(for: keyID)
+            } catch {
+                return .unreadableKey(error.localizedDescription)
             }
+            guard let key else { return .missingKey }
             return username.isEmpty ? .needsSignIn(username: "") : .ready(username: username, credential: .key(key))
         case .password:
             let tunnelsToItself = ssh.host.trimmingCharacters(in: .whitespaces).isEmpty

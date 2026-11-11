@@ -1,4 +1,5 @@
 import Foundation
+import Security
 import Testing
 @testable import OpenScreensCore
 
@@ -8,9 +9,9 @@ extension SSHTests {
         let storage = InMemorySecretStorage()
         var store: SSHKeyStore { SSHKeyStore(storage: storage) }
 
-        @Test func startsEmpty() {
-            #expect(store.keys().isEmpty)
-            #expect(store.privateKey(for: UUID()) == nil)
+        @Test func startsEmpty() throws {
+            #expect(try store.keys().isEmpty)
+            #expect(try store.privateKey(for: UUID()) == nil)
         }
 
         @Test func aSavedKeyCanBeListedAndLoaded() throws {
@@ -25,8 +26,8 @@ extension SSHTests {
             #expect(abs(saved.createdAt.timeIntervalSinceNow) < 5)
 
             // A second store on the same storage sees exactly what was saved.
-            #expect(SSHKeyStore(storage: storage).keys() == [saved])
-            let loaded = try #require(store.privateKey(for: saved.id))
+            #expect(try SSHKeyStore(storage: storage).keys() == [saved])
+            let loaded = try #require(try store.privateKey(for: saved.id))
             #expect(loaded.fingerprint == key.fingerprint)
         }
 
@@ -36,9 +37,9 @@ extension SSHTests {
                 let saved = try store.add(name: fixture.name, key: key)
                 #expect(saved.algorithm == fixture.algorithmName)
                 #expect(saved.fingerprint == fixture.fingerprint)
-                #expect(store.privateKey(for: saved.id)?.openSSHPublicKey == fixture.publicKey)
+                #expect(try store.privateKey(for: saved.id)?.openSSHPublicKey == fixture.publicKey)
             }
-            #expect(store.keys().count == SSHKeyFixtures.all.count)
+            #expect(try store.keys().count == SSHKeyFixtures.all.count)
         }
 
         @Test func eachKeyIsOneEntryUnderItsOwnAccount() throws {
@@ -71,7 +72,7 @@ extension SSHTests {
                     JSONSerialization.data(withJSONObject: record),
                     account: "sshkey.\(id.uuidString)")
             }
-            #expect(store.keys().map(\.name) == ["Key 1", "Key 0", "Key 2"])
+            #expect(try store.keys().map(\.name) == ["Key 1", "Key 0", "Key 2"])
         }
 
         @Test func renamingKeepsTheKey() throws {
@@ -83,7 +84,7 @@ extension SSHTests {
             #expect(renamed.id == saved.id)
             #expect(renamed.createdAt == saved.createdAt)
             #expect(renamed.fingerprint == key.fingerprint)
-            #expect(store.keys() == [renamed])
+            #expect(try store.keys() == [renamed])
 
             #expect(try store.rename(UUID(), to: "Nobody") == nil)
         }
@@ -93,11 +94,84 @@ extension SSHTests {
             let removed = try store.add(name: "Removed", key: .generateEd25519())
 
             try store.delete(removed.id)
-            #expect(store.keys() == [kept])
-            #expect(store.privateKey(for: removed.id) == nil)
-            #expect(store.privateKey(for: kept.id) != nil)
+            #expect(try store.keys() == [kept])
+            #expect(try store.privateKey(for: removed.id) == nil)
+            #expect(try store.privateKey(for: kept.id) != nil)
             // Deleting what is not there is not an error.
             try store.delete(removed.id)
+        }
+
+        // MARK: In the keychain
+
+        /// A store on a keychain that is not the real one, set up the way
+        /// the real one is.
+        static func storeInKeychain() -> (store: SSHKeyStore, keychain: FakeKeychain) {
+            let keychain = FakeKeychain()
+            let real = SSHKeyStore.keychain
+            let storage = KeychainStorage(
+                service: "test", synchronizes: real.synchronizes,
+                accessibility: real.accessibility, items: keychain)
+            return (SSHKeyStore(storage: storage), keychain)
+        }
+
+        @Test func aKeyIsKeptForUseWhileTheDeviceIsUnlocked() throws {
+            let (store, keychain) = Self.storeInKeychain()
+            let saved = try store.add(name: "Laptop", key: .generateEd25519())
+
+            // It follows the user to their other devices, and can be read
+            // on any of them only with the device unlocked.
+            let item = try #require(keychain.item("sshkey.\(saved.id.uuidString)", in: .dataProtection))
+            #expect(item.isSynchronizable == true)
+            #expect(item.accessibility == kSecAttrAccessibleWhenUnlocked as String)
+        }
+
+        @Test func renamingAKeyThatCannotBeSavedAgainKeepsTheKey() throws {
+            let (store, keychain) = Self.storeInKeychain()
+            let key = SSHPrivateKey.generateEd25519()
+            let saved = try store.add(name: "Old name", key: key)
+
+            // The keychain takes nothing new for the moment.
+            for call in [FakeKeychain.Call.update, .add] {
+                keychain.make(call, on: .dataProtection, answer: errSecInteractionNotAllowed)
+            }
+            #expect(throws: SecretStorageError(status: errSecInteractionNotAllowed)) {
+                try store.rename(saved.id, to: "New name")
+            }
+
+            // The private key is the one thing that cannot be had again. It
+            // is where it was, under the name it had.
+            for call in [FakeKeychain.Call.update, .add] {
+                keychain.make(call, on: .dataProtection, answer: nil)
+            }
+            #expect(try store.keys() == [saved])
+            #expect(try store.privateKey(for: saved.id)?.fingerprint == key.fingerprint)
+        }
+
+        @Test func aKeychainThatCannotBeReadIsNotTakenForOneWithoutKeys() throws {
+            let (store, keychain) = Self.storeInKeychain()
+            let saved = try store.add(name: "Laptop", key: .generateEd25519())
+            let locked = SecretStorageError(status: errSecInteractionNotAllowed)
+            keychain.make(.copyMatching, on: .dataProtection, answer: locked.status)
+
+            // "No keys" and "no such key" would both be wrong, and would
+            // send the user off to make a key they already have.
+            #expect(throws: locked) { try store.keys() }
+            #expect(throws: locked) { try store.privateKey(for: saved.id) }
+            #expect(throws: locked) { try store.rename(saved.id, to: "Renamed") }
+
+            keychain.make(.copyMatching, on: .dataProtection, answer: nil)
+            #expect(try store.keys() == [saved])
+        }
+
+        @Test func aKeyThatCouldNotBeDeletedIsStillThere() throws {
+            let (store, keychain) = Self.storeInKeychain()
+            let saved = try store.add(name: "Laptop", key: .generateEd25519())
+            keychain.make(.delete, on: .dataProtection, answer: errSecInteractionNotAllowed)
+
+            #expect(throws: SecretStorageError(status: errSecInteractionNotAllowed)) {
+                try store.delete(saved.id)
+            }
+            #expect(try store.keys() == [saved])
         }
 
         @Test func otherSecretsAreLeftAlone() throws {
@@ -107,7 +181,7 @@ extension SSHTests {
             let saved = try store.add(name: "Mine", key: .generateEd25519())
 
             // The damaged record is skipped rather than failing the listing.
-            #expect(store.keys() == [saved])
+            #expect(try store.keys() == [saved])
             try store.delete(saved.id)
             #expect(storage.accounts() == ["computer.1234.vnc", "sshkey.damaged"])
         }

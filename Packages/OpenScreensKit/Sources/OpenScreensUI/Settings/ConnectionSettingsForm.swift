@@ -213,18 +213,25 @@ struct SSHKeyPicker: View {
     @Binding var selection: UUID?
 
     var body: some View {
-        let keys = model.sshKeys.keys()
-        if keys.isEmpty {
-            LabeledContent("Key") {
-                Text("No keys yet — add one in Settings › SSH Keys")
-                    .foregroundStyle(.secondary)
+        if let keys = try? model.sshKeys.keys() {
+            if keys.isEmpty {
+                LabeledContent("Key") {
+                    Text("No keys yet — add one in Settings › SSH Keys")
+                        .foregroundStyle(.secondary)
+                }
+            } else {
+                Picker("Key", selection: $selection) {
+                    Text("Choose…").tag(UUID?.none)
+                    ForEach(keys) { key in
+                        Text(key.name).tag(UUID?.some(key.id))
+                    }
+                }
             }
         } else {
-            Picker("Key", selection: $selection) {
-                Text("Choose…").tag(UUID?.none)
-                ForEach(keys) { key in
-                    Text(key.name).tag(UUID?.some(key.id))
-                }
+            // Not the same as having none: Settings › SSH Keys says why.
+            LabeledContent("Key") {
+                Text("Your keys could not be read from the keychain")
+                    .foregroundStyle(.secondary)
             }
         }
     }
