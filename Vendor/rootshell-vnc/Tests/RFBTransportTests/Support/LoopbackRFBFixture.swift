@@ -61,9 +61,13 @@ final class LoopbackRFBFixture: @unchecked Sendable {
         close()
     }
 
+    /// Returns as soon as the bytes are there, so the timeout only bounds a
+    /// failure. It is generous because what the client sends next can sit
+    /// behind an SRP proof, which an unoptimized build on a shared CI
+    /// machine has taken more than three seconds to compute.
     func waitForClientBytes(
         atLeast count: Int,
-        timeout: Duration = .seconds(3)
+        timeout: Duration = .seconds(20)
     ) async -> Data? {
         let clock = ContinuousClock()
         let deadline = clock.now.advanced(by: timeout)
