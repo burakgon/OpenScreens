@@ -162,6 +162,32 @@ struct HingePostureTests {
         #expect(!HingePosture.isLaptopLike(isPartiallyOpen: true, angle: nearlyFlat))
     }
 
+    /// A hinge held at the edge of the range reads to either side of it
+    /// from one moment to the next.
+    @Test func aHingeAtTheEdgeOfTheRangeDoesNotFlicker() {
+        var isLaptop = false
+        var changes = 0
+        for degrees in [133.0, 136, 134, 137, 135, 138, 134, 139, 133, 140] {
+            let now = HingePosture.isLaptopLike(
+                isPartiallyOpen: true, angle: degrees, wasLaptopLike: isLaptop)
+            if now != isLaptop { changes += 1 }
+            isLaptop = now
+        }
+        #expect(isLaptop)
+        #expect(changes == 1)
+
+        // Opened flat, or shut, it stops being one.
+        let flat = HingePosture.isLaptopLike(isPartiallyOpen: true, angle: 150, wasLaptopLike: true)
+        let shut = HingePosture.isLaptopLike(isPartiallyOpen: true, angle: 40, wasLaptopLike: true)
+        let notPartial = HingePosture.isLaptopLike(isPartiallyOpen: false, angle: 100, wasLaptopLike: true)
+        #expect(!flat)
+        #expect(!shut)
+        #expect(!notPartial)
+        // And not having been one, it does not become one from further off.
+        let from140 = HingePosture.isLaptopLike(isPartiallyOpen: true, angle: 140, wasLaptopLike: false)
+        #expect(!from140)
+    }
+
     @Test func withoutAnAngleTheStatusDecides() {
         #expect(HingePosture.isLaptopLike(isPartiallyOpen: true, angle: 0))
         #expect(HingePosture.isLaptopLike(isPartiallyOpen: true, angle: .nan))

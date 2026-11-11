@@ -483,12 +483,16 @@ public final class RemoteCanvasView: UIView {
         guard #available(iOS 27.1, *) else { return }
         let interaction = UIHingeInteraction { [weak self] _, update in
             guard let self else { return }
+            let bridge = self.session.canvasBridge
             let isHalfOpen = update.hinge.map {
-                HingePosture.isLaptopLike(isPartiallyOpen: $0.status == .partiallyOpen, angle: $0.angle)
+                HingePosture.isLaptopLike(
+                    isPartiallyOpen: $0.status == .partiallyOpen, angle: $0.angle,
+                    wasLaptopLike: bridge.hingeIsPartiallyOpen)
             } ?? false
-            if self.session.canvasBridge.hingeIsPartiallyOpen != isHalfOpen {
-                self.session.canvasBridge.hingeIsPartiallyOpen = isHalfOpen
-            }
+            // A hinge reports every small movement of a device held in the
+            // hand. Only a change of posture is anything to act on.
+            guard bridge.hingeIsPartiallyOpen != isHalfOpen else { return }
+            bridge.hingeIsPartiallyOpen = isHalfOpen
             self.setNeedsLayout()
         }
         addInteraction(interaction)

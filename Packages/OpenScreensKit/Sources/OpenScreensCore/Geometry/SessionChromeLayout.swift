@@ -117,10 +117,18 @@ public enum HingePosture {
     ///     every sign; a reading no larger than a full turn in radians is
     ///     taken to be radians. Zero or less means the angle is not known,
     ///     and then the status is all there is to go by.
-    public static func isLaptopLike(isPartiallyOpen: Bool, angle: CGFloat) -> Bool {
+    ///   - wasLaptopLike: What the answer was for the reading before this
+    ///     one. A hinge held at the edge of the range reads a little to
+    ///     either side of it from one moment to the next, and the answer
+    ///     must not change with every reading: once open like a laptop, it
+    ///     stays that until it is clearly not.
+    public static func isLaptopLike(
+        isPartiallyOpen: Bool, angle: CGFloat, wasLaptopLike: Bool = false
+    ) -> Bool {
         guard isPartiallyOpen else { return false }
         guard angle.isFinite, angle > 0 else { return true }
         let degrees = angle <= 2 * .pi ? angle * 180 / .pi : angle
-        return (60...135).contains(degrees)
+        let range: ClosedRange<CGFloat> = wasLaptopLike ? 50...145 : 60...135
+        return range.contains(degrees)
     }
 }
