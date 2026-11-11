@@ -710,7 +710,7 @@ extension RemoteCanvasView: UIGestureRecognizerDelegate {
             return
         }
         lastDragViewPoint = viewPoint
-        let usable = session.viewport.usableRect
+        let usable = session.viewport.visibleRect
         let margin: CGFloat = 36
         let nearEdge = viewPoint.x < usable.minX + margin || viewPoint.x > usable.maxX - margin
             || viewPoint.y < usable.minY + margin || viewPoint.y > usable.maxY - margin
@@ -728,7 +728,7 @@ extension RemoteCanvasView: UIGestureRecognizerDelegate {
             stopEdgePan()
             return
         }
-        let usable = session.viewport.usableRect
+        let usable = session.viewport.visibleRect
         let margin: CGFloat = 36
         let maximumSpeed: CGFloat = 700
         func speed(_ distance: CGFloat) -> CGFloat {

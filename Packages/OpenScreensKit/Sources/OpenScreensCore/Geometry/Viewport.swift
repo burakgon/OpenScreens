@@ -54,6 +54,17 @@ public struct Viewport: Equatable, Sendable {
         didSet { if insets != oldValue { clampOffset() } }
     }
 
+    /// How much of the bottom of the usable area something has come to
+    /// cover for a while: an on-screen keyboard, a trackpad deck.
+    ///
+    /// The picture is not made smaller for it. A desktop shrunk to what is
+    /// left above a keyboard is too small to read what is being typed. It
+    /// keeps the size it has with nothing in the way, and moves so that any
+    /// part of it can be brought into what is left: ``visibleRect``.
+    public var bottomCover: CGFloat = 0 {
+        didSet { if bottomCover != oldValue { clampOffset() } }
+    }
+
     /// Zoom applied on top of the scaling mode. 1 means "as the mode lays it out".
     public private(set) var magnification: CGFloat = 1
 
@@ -91,6 +102,13 @@ public struct Viewport: Equatable, Sendable {
             y: insets.top,
             width: max(0, viewSize.width - insets.left - insets.right),
             height: max(0, viewSize.height - insets.top - insets.bottom))
+    }
+
+    /// The part of the usable area that nothing covers.
+    public var visibleRect: CGRect {
+        let usable = usableRect
+        let cover = min(max(0, bottomCover), usable.height)
+        return CGRect(x: usable.minX, y: usable.minY, width: usable.width, height: usable.height - cover)
     }
 
     /// Points per remote pixel when the whole screen is visible.
@@ -146,12 +164,13 @@ public struct Viewport: Equatable, Sendable {
         abs(magnification - 1) > 0.001 || abs(offset.width) > 0.5 || abs(offset.height) > 0.5
     }
 
-    /// Whether part of the remote screen is outside the view.
+    /// Whether part of the remote screen is outside what can be seen of
+    /// the view.
     public var isCropped: Bool {
         guard isReady else { return false }
         let rect = contentRect
-        let usable = usableRect
-        return rect.width > usable.width + 0.5 || rect.height > usable.height + 0.5
+        let visible = visibleRect
+        return rect.width > visible.width + 0.5 || rect.height > visible.height + 0.5
     }
 
     // MARK: - Coordinate conversion
@@ -228,9 +247,9 @@ public struct Viewport: Equatable, Sendable {
     @discardableResult
     public mutating func reveal(_ remotePoint: CGPoint, margin: CGFloat = 0) -> Bool {
         guard isReady else { return false }
-        let usable = usableRect
-        let inset = min(margin, min(usable.width, usable.height) / 3)
-        let target = usable.insetBy(dx: inset, dy: inset)
+        let visible = visibleRect
+        let inset = min(margin, min(visible.width, visible.height) / 3)
+        let target = visible.insetBy(dx: inset, dy: inset)
         let point = viewPoint(for: remotePoint)
         var delta = CGSize.zero
         if point.x < target.minX {
@@ -251,6 +270,10 @@ public struct Viewport: Equatable, Sendable {
 
     /// Keeps the picture from being dragged away from the view: an axis that
     /// fits is centred, and one that does not can only pan as far as its edges.
+    ///
+    /// Down the screen, "fits" means fits in what nothing covers. A picture
+    /// taller than that pans until its last line clears the cover, however
+    /// well it fits the view when the cover is gone.
     public mutating func clampOffset() {
         guard isReady else {
             offset = .zero
@@ -258,11 +281,18 @@ public struct Viewport: Equatable, Sendable {
         }
         magnification = min(max(magnification, minimumMagnification), maximumMagnification)
         let usable = usableRect
+        let visible = visibleRect
         let width = contentSize.width * scale
         let height = contentSize.height * scale
         let limitX = max(0, (width - usable.width) / 2)
-        let limitY = max(0, (height - usable.height) / 2)
         offset.width = min(max(offset.width, -limitX), limitX)
-        offset.height = min(max(offset.height, -limitY), limitY)
+        // The offset is counted from the middle of the usable area.
+        if height <= visible.height {
+            offset.height = visible.midY - usable.midY
+        } else {
+            let bottomAtTheCover = visible.maxY - (usable.midY + height / 2)
+            let topAtTheTop = visible.minY - (usable.midY - height / 2)
+            offset.height = min(max(offset.height, bottomAtTheCover), topAtTheTop)
+        }
     }
 }

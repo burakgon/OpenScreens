@@ -32,6 +32,10 @@ public final class RemoteCanvasView: UIView {
 
     /// Standard-mode framebuffer. High Performance video lives in the
     /// engine's own layers, hosted alongside this one.
+    /// Holds everything that is part of the picture, and keeps it to the
+    /// part of the screen the picture has: a picture zoomed in, or slid up
+    /// from under a keyboard, would otherwise run on under the status bar.
+    private let pictureLayer = CALayer()
     private let imageLayer = CALayer()
     /// The pointer, drawn locally so it moves without waiting for the network.
     private let cursorLayer = CALayer()
@@ -79,9 +83,12 @@ public final class RemoteCanvasView: UIView {
         imageLayer.minificationFilter = .trilinear
         imageLayer.magnificationFilter = .linear
         imageLayer.actions = ["contents": NSNull(), "bounds": NSNull(), "position": NSNull()]
-        layer.addSublayer(imageLayer)
-        layer.addSublayer(session.engine.videoBandRenderer.containerLayer)
-        layer.addSublayer(session.engine.secondaryVideoBandRenderer.containerLayer)
+        pictureLayer.masksToBounds = true
+        pictureLayer.actions = ["bounds": NSNull(), "position": NSNull()]
+        layer.addSublayer(pictureLayer)
+        pictureLayer.addSublayer(imageLayer)
+        pictureLayer.addSublayer(session.engine.videoBandRenderer.containerLayer)
+        pictureLayer.addSublayer(session.engine.secondaryVideoBandRenderer.containerLayer)
 
         cursorLayer.actions = [
             "contents": NSNull(), "bounds": NSNull(), "position": NSNull(), "hidden": NSNull(),
@@ -91,7 +98,7 @@ public final class RemoteCanvasView: UIView {
         cursorLayer.shadowOpacity = 0.35
         cursorLayer.shadowRadius = 1.5
         cursorLayer.shadowOffset = CGSize(width: 0, height: 1)
-        layer.addSublayer(cursorLayer)
+        pictureLayer.addSublayer(cursorLayer)
 
         installGestures()
         addInteraction(UIDropInteraction(delegate: self))
@@ -184,17 +191,24 @@ public final class RemoteCanvasView: UIView {
         if session.canvasBridge.chromeLayout != layout {
             session.canvasBridge.chromeLayout = layout
         }
-        var insets = layout.pictureInsets
+        let insets = layout.pictureInsets
         // The desktop is sized for the screen with nothing covering it. A
-        // keyboard or trackpad deck only moves the picture out of the way;
-        // resizing the remote desktop every time one appears would be slow
-        // and would rearrange the user's windows.
+        // keyboard or trackpad deck neither resizes the remote desktop,
+        // which would be slow and would rearrange the user's windows, nor
+        // shrinks the picture, which would make it too small to read: the
+        // picture slides up as far as it takes to show where the pointer is.
         let uncovered = CGSize(
             width: max(1, bounds.width - insets.left - insets.right),
             height: max(1, bounds.height - insets.top - insets.bottom))
-        insets.bottom = max(insets.bottom, session.canvasBridge.bottomObstruction)
         if session.viewport.insets != insets {
             session.viewport.insets = insets
+        }
+        let cover = max(0, session.canvasBridge.bottomObstruction - insets.bottom)
+        if session.viewport.bottomCover != cover {
+            session.viewport.bottomCover = cover
+            if cover > 0, hasPlacedPointer {
+                session.viewport.reveal(pointerLocation, margin: 36)
+            }
         }
         session.viewDidResize(to: uncovered, displayScale: scale)
     }
@@ -228,7 +242,8 @@ public final class RemoteCanvasView: UIView {
         _ = session.canvasBridge.bottomObstruction
         let arrangement = session.arrangement
         let pictureSize = arrangement.size
-        if session.viewport.contentSize != pictureSize {
+        let isANewPicture = session.viewport.contentSize != pictureSize
+        if isANewPicture {
             session.viewport.contentSize = pictureSize
         }
         if pictureSize.width > 0 {
@@ -243,13 +258,25 @@ public final class RemoteCanvasView: UIView {
                     y: min(max(0, pointerLocation.y), max(0, pictureSize.height - 1)))
             }
         }
+        if isANewPicture, session.viewport.bottomCover > 0 {
+            // A picture of another size, with part of the view covered:
+            // where the last one had been slid to means nothing for this
+            // one. From its top, then as far as it takes to show the pointer.
+            session.viewport.pan(by: CGSize(width: 0, height: bounds.height * 100))
+            session.viewport.reveal(pointerLocation, margin: 36)
+        }
         let content = session.viewport.contentRect
+        let area = session.viewport.usableRect
         let isVideo = engine.isHighPerformanceMode
         let frames = arrangement.frames
         let scale = displayScale
 
         CATransaction.begin()
         CATransaction.setDisableActions(true)
+        // The same coordinates inside as outside: everything in the picture
+        // is placed in the view's own terms, and only cut to the area.
+        pictureLayer.bounds = area
+        pictureLayer.position = CGPoint(x: area.midX, y: area.midY)
         imageLayer.isHidden = isVideo
         imageLayer.contentsScale = scale
         imageLayer.frame = content

@@ -662,4 +662,114 @@ struct ViewportTests {
         #expect(viewport.contentRect == CGRect(x: 0, y: 0, width: 400, height: 300))
         #expect(viewport.offset == .zero)
     }
+
+    // MARK: Something covering the bottom of the view
+
+    /// A phone held upright, showing a desktop made to fit it: 402 × 812
+    /// points for a picture of 1440 × 2912 pixels.
+    private func phone() -> Viewport {
+        Viewport(
+            viewSize: CGSize(width: 402, height: 812),
+            contentSize: CGSize(width: 1440, height: 2912),
+            backingScale: 3)
+    }
+
+    @Test func aKeyboardDoesNotMakeThePictureSmaller() {
+        var viewport = phone()
+        let before = viewport.contentRect
+        #expect(close(before.width, 401.538, within: 0.01))
+
+        // A keyboard comes up over the bottom 336 points.
+        viewport.bottomCover = 336
+        #expect(viewport.visibleRect == CGRect(x: 0, y: 0, width: 402, height: 476))
+        #expect(viewport.usableRect == CGRect(x: 0, y: 0, width: 402, height: 812))
+        #expect(close(viewport.contentRect.size.width, before.width))
+        #expect(close(viewport.contentRect.size.height, before.height))
+        #expect(close(viewport.scale, viewport.fitScale))
+        // It starts where it was, its top at the top.
+        #expect(close(viewport.contentRect.minY, 0))
+        #expect(viewport.isCropped)
+
+        // And settles back when the keyboard goes.
+        viewport.bottomCover = 0
+        #expect(close(viewport.contentRect, before))
+        #expect(!viewport.isCropped)
+        #expect(!viewport.isTransformed)
+    }
+
+    @Test func underACoverThePicturePansUntilItsLastLineClearsIt() {
+        var viewport = phone()
+        viewport.bottomCover = 336
+
+        viewport.pan(by: CGSize(width: 0, height: -10_000))
+        #expect(close(viewport.contentRect.maxY, 476))
+        // No further, and not sideways: across, the picture fits.
+        viewport.pan(by: CGSize(width: -500, height: -50))
+        #expect(close(viewport.contentRect.maxY, 476))
+        #expect(close(viewport.contentRect.midX, 201))
+
+        viewport.pan(by: CGSize(width: 0, height: 10_000))
+        #expect(close(viewport.contentRect.minY, 0))
+    }
+
+    @Test func revealBringsAPixelUnderTheCoverIntoWhatCanBeSeen() throws {
+        var viewport = phone()
+        viewport.bottomCover = 336
+        // The Dock, at the bottom of the desktop: behind the keyboard.
+        let dock = CGPoint(x: 720, y: 2880)
+        #expect(viewport.viewPoint(for: dock).y > 476)
+
+        let moved = viewport.reveal(dock, margin: 36)
+        #expect(moved)
+        let shown = viewport.viewPoint(for: dock)
+        #expect(shown.y <= 476 - 36 + 1e-6 || close(viewport.contentRect.maxY, 476))
+        #expect(shown.y < 476)
+        // The same pixel is still under the same point of the picture.
+        let back = try #require(viewport.remotePoint(for: shown))
+        #expect(close(back, dock, within: 1e-6))
+
+        // Something already in view is left where it is.
+        let offset = viewport.offset
+        let movedAgain = viewport.reveal(dock, margin: 36)
+        #expect(!movedAgain)
+        #expect(viewport.offset == offset)
+    }
+
+    @Test func aPictureThatFitsAboveTheCoverIsCentredThere() {
+        // A wide desktop on the same phone: short enough to clear a keyboard.
+        var viewport = Viewport(
+            viewSize: CGSize(width: 402, height: 812),
+            contentSize: CGSize(width: 1600, height: 1200))
+        viewport.bottomCover = 336
+        let picture = viewport.contentRect
+        #expect(close(picture.height, 301.5))
+        #expect(close(picture.midY, 238))
+        #expect(!viewport.isCropped)
+        viewport.pan(by: CGSize(width: 0, height: -200))
+        #expect(close(viewport.contentRect.midY, 238))
+    }
+
+    @Test func aCoverTallerThanTheViewLeavesNothingToSee() {
+        var viewport = phone()
+        viewport.bottomCover = 5_000
+        #expect(viewport.visibleRect == CGRect(x: 0, y: 0, width: 402, height: 0))
+        // The picture keeps its size all the same.
+        #expect(close(viewport.contentRect.height, 812))
+        viewport.bottomCover = -40
+        #expect(viewport.visibleRect == viewport.usableRect)
+    }
+
+    @Test func zoomingUnderACoverStillPansToEveryEdge() {
+        var viewport = phone()
+        viewport.bottomCover = 336
+        viewport.magnify(by: 2, around: CGPoint(x: 201, y: 200))
+        #expect(close(viewport.contentRect.width, 2 * 401.538, within: 0.01))
+
+        viewport.pan(by: CGSize(width: 10_000, height: 10_000))
+        #expect(close(viewport.contentRect.minX, 0))
+        #expect(close(viewport.contentRect.minY, 0))
+        viewport.pan(by: CGSize(width: -10_000, height: -10_000))
+        #expect(close(viewport.contentRect.maxX, 402))
+        #expect(close(viewport.contentRect.maxY, 476))
+    }
 }

@@ -110,7 +110,7 @@ struct FileTransferOverlay: View {
     /// Clear of a keyboard or the deck, and of the part of the screen the
     /// system keeps for the home indicator.
     private var listBottom: CGFloat {
-        max(session.viewport.insets.bottom, session.canvasBridge.chromeLayout?.safeArea.bottom ?? 0) + 12
+        max(session.viewport.bottomCover, session.canvasBridge.chromeLayout?.safeArea.bottom ?? 0) + 12
     }
     #endif
 
