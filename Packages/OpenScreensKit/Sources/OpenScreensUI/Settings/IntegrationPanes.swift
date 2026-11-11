@@ -187,6 +187,8 @@ struct SSHKeysSettingsPane: View {
     @State private var nameText = ""
     @State private var isImporting = false
     @State private var pendingImport: PendingImport?
+    /// A key file is being unlocked, which can take seconds.
+    @State private var isUnlocking = false
     @State private var passphrase = ""
     @State private var errorMessage: String?
     @State private var copiedKey: StoredSSHKey.ID?
@@ -260,6 +262,15 @@ struct SSHKeysSettingsPane: View {
             }
         }
         .formStyle(.grouped)
+        .disabled(isUnlocking)
+        .overlay {
+            if isUnlocking {
+                ProgressView("Unlocking the key…")
+                    .padding(.horizontal, 22)
+                    .padding(.vertical, 16)
+                    .glassPanel(cornerRadius: 18)
+            }
+        }
         .onAppear(perform: reload)
         .fileImporter(isPresented: $isImporting, allowedContentTypes: [.data, .text]) { result in
             guard case .success(let url) = result else { return }
@@ -452,19 +463,34 @@ struct SSHKeysSettingsPane: View {
     }
 
     private func add(_ pending: PendingImport, passphrase: String?) {
-        defer { self.passphrase = "" }
-        do {
-            let key = try SSHPrivateKey(openSSH: pending.text, passphrase: passphrase)
-            let name = key.comment.isEmpty ? pending.name : key.comment
-            try model.sshKeys.add(name: name, key: key)
-            pendingImport = nil
-            reload()
-        } catch SSHKeyError.passphraseRequired {
-            pendingImport = pending
-        } catch SSHKeyError.wrongPassphrase {
-            errorMessage = "The passphrase is not correct."
-        } catch {
-            errorMessage = error.localizedDescription
+        self.passphrase = ""
+        let text = pending.text
+        isUnlocking = true
+        Task {
+            // Turning a passphrase into a key is slow on purpose, and a key
+            // file says how slow: up to seconds for one made to resist
+            // guessing. That is done away from the interface.
+            let result = await Task.detached(priority: .userInitiated) { () -> Result<SSHPrivateKey, SSHKeyError> in
+                do throws(SSHKeyError) {
+                    return .success(try SSHPrivateKey(openSSH: text, passphrase: passphrase))
+                } catch {
+                    return .failure(error)
+                }
+            }.value
+            isUnlocking = false
+            do {
+                let key = try result.get()
+                let name = key.comment.isEmpty ? pending.name : key.comment
+                try model.sshKeys.add(name: name, key: key)
+                pendingImport = nil
+                reload()
+            } catch SSHKeyError.passphraseRequired {
+                pendingImport = pending
+            } catch SSHKeyError.wrongPassphrase {
+                errorMessage = "The passphrase is not correct."
+            } catch {
+                errorMessage = error.localizedDescription
+            }
         }
     }
 }
