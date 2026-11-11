@@ -535,7 +535,9 @@ private final class FakeTailscale {
         await #expect(throws: TailscaleError.timedOut) {
             try await source.devices()
         }
-        #expect(clock.now - started < .seconds(5))
+        // Long before the ten minutes the tool would have gone on for. A
+        // busy machine has taken nine seconds to stop it.
+        #expect(clock.now - started < .seconds(60))
     }
 
     @Test func locatingPicksTheFirstExecutableFile() throws {
