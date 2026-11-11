@@ -1065,6 +1065,10 @@ public final class VNCSession {
     private var remoteDisplayResizeTask: Task<Void, Never>?
     @ObservationIgnored
     private var lastRequestedClientDisplaySize: RemoteDisplaySize?
+
+    /// False from when a desktop of another size is asked of a Mac until the
+    /// Mac has made its displays over, whether or not to the size asked for.
+    public private(set) var isRemoteDisplayResizeSettled = true
     /// Most recent client viewport, retained across connections so Match Client
     /// can be staged before Apple media setup starts. Without this, the server
     /// begins by encoding the physical display and a remote phone must receive
@@ -3190,6 +3194,9 @@ public final class VNCSession {
     ) {
         guard sequence > appleResizeSettledSequenceApplied else { return }
         appleResizeSettledSequenceApplied = sequence
+        if isRemoteDisplayResizeSettled != settled {
+            isRemoteDisplayResizeSettled = settled
+        }
         if settled != loginPasswordSendGate.isTransportSettled {
             lastLoginDisplayTransitionNanos =
                 DispatchTime.now().uptimeNanoseconds
