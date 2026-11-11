@@ -129,6 +129,13 @@ public final class RemoteSession: Identifiable {
     /// Checks, a while after a desktop size was asked for, that the Mac made
     /// a desktop of that size.
     @ObservationIgnored private var desktopSizeCheck: Task<Void, Never>?
+    /// What the check under way, or the last one, was about.
+    @ObservationIgnored private var checkedDesktopRequest: DesktopRequest?
+
+    private struct DesktopRequest: Equatable {
+        var room: CGSize
+        var minimum: CGSize
+    }
     /// Macs that answered a desktop sized for a small screen with one of
     /// their own choosing. For as long as the app runs they are asked for
     /// the size every Mac gives.
@@ -807,6 +814,12 @@ public final class RemoteSession: Identifiable {
     /// desktop smaller than the size every Mac gives is checked on, and a
     /// Mac that did not make it is asked for that size instead.
     private func checkDesktopSize(for room: CGSize, minimum: CGSize) {
+        // The canvas reports its size at every layout, most of them of a
+        // size already reported: a check under way for the same size is
+        // left to finish.
+        let asked = DesktopRequest(room: room, minimum: minimum)
+        if desktopSizeCheck != nil, checkedDesktopRequest == asked { return }
+        checkedDesktopRequest = asked
         desktopSizeCheck?.cancel()
         desktopSizeCheck = nil
         guard minimum != Self.roomyDesktopSize, settings.displays == .single,
@@ -838,8 +851,14 @@ public final class RemoteSession: Identifiable {
                     break
                 }
             }
-            guard wasRefused, let self, !Task.isCancelled, self.isConnected,
-                  self.engine.isHighPerformanceMode,
+            guard let self, !Task.isCancelled else { return }
+            guard wasRefused else {
+                // The connection never came to rest, and nothing was learned:
+                // the next time this size is asked for, it is checked again.
+                self.desktopSizeCheck = nil
+                return
+            }
+            guard self.isConnected, self.engine.isHighPerformanceMode,
                   self.engine.configuration.displaySizingMode == .matchClient else { return }
             Self.refusesSmallDesktops.insert(self.computer.id)
             self.requestDisplaySize()
