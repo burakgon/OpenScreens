@@ -1003,6 +1003,65 @@ extension SSHTests {
                 await client.close()
             }
         }
+
+        // MARK: Permissions and dates
+
+        @Test func onlyTheNinePermissionBitsAreSentWithANewFileOrFolder() async throws {
+            try await SFTPTestServer.run(extensions: [SFTPTestServer.posixRename]) { server in
+                let local = try TemporaryDirectory()
+                let tree = local.file("tree")
+                try FileManager.default.createDirectory(at: tree, withIntermediateDirectories: true)
+                let tool = tree.appending(path: "tool")
+                try Data("#!/bin/sh\n".utf8).write(to: tool)
+                // Run as its owner, by its group, and not deletable by
+                // others: none of which is anybody's to hand to a server.
+                try FileManager.default.setAttributes([.posixPermissions: 0o6750], ofItemAtPath: tool.path)
+                try FileManager.default.setAttributes([.posixPermissions: 0o1770], ofItemAtPath: tree.path)
+
+                let client = try await server.connect()
+                let sftp = try await client.openSFTP()
+                try await sftp.uploadDirectory(localURL: tree, to: "/tree")
+
+                let sent = server.requests.compactMap { request -> SFTPAttributes? in
+                    switch request {
+                    case .open(_, _, _, let attributes), .mkdir(_, _, let attributes): attributes
+                    default: nil
+                    }
+                }
+                #expect(sent == [SFTPAttributes(mode: 0o770), SFTPAttributes(mode: 0o750)])
+                #expect(server.volume.node(at: "/tree")?.permissions == 0o770)
+                #expect(server.volume.node(at: "/tree/tool")?.permissions == 0o750)
+                await client.close()
+            }
+        }
+
+        @Test func aServerThatSaysNothingAboutAFileStillHasItDownloaded() async throws {
+            try await SFTPTestServer.run(script: { request in
+                // Not what the file is, not who may read it, not when it
+                // was written: the server will not say.
+                if case .fstat(let id, _) = request {
+                    return .reply([.status(id: id, code: .operationUnsupported, message: "", language: "")])
+                }
+                return .serve
+            }) { server in
+                let local = try TemporaryDirectory()
+                server.volume.addFile("data.bin", contents: Data("contents".utf8), permissions: 0o600)
+                let client = try await server.connect()
+                let sftp = try await client.openSFTP()
+
+                let started = Date.now
+                let copy = local.file("data.bin")
+                try await sftp.download(remotePath: "/data.bin", to: copy)
+                #expect(try Data(contentsOf: copy) == Data("contents".utf8))
+                // It is a new file like any other made here, then.
+                let attributes = try FileManager.default.attributesOfItem(atPath: copy.path)
+                let permissions = try #require((attributes[.posixPermissions] as? NSNumber)?.intValue)
+                #expect(permissions & ~0o666 == 0 && permissions & 0o600 == 0o600)
+                let modified = try #require(attributes[.modificationDate] as? Date)
+                #expect(modified.timeIntervalSince(started) > -2)
+                await client.close()
+            }
+        }
     }
 }
 

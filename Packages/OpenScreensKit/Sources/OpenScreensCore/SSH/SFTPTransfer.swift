@@ -29,8 +29,12 @@ extension SFTPClient {
     /// the server is still answering.
     ///
     /// A symbolic link at `localURL` is replaced by the file; it is not
-    /// written through to what it points at. A file that is replaced passes
-    /// its permissions on to the one that replaces it.
+    /// written through to what it points at.
+    ///
+    /// The copy is dated as the remote file is. A new file gets the remote
+    /// file's permissions, within what this device's mask for new files
+    /// allows; a file that is replaced passes its own permissions on to the
+    /// one that replaces it.
     ///
     /// - Parameter progress: Called as data arrives with the bytes received
     ///   so far and the file's size, when the server reports one.
@@ -56,9 +60,11 @@ extension SFTPClient {
     /// The folder has to allow a new file to be made in it, even when the
     /// upload replaces a file that could itself be written to. A symbolic
     /// link at `remotePath` is replaced by the file, not written through.
-    /// A file that is replaced passes its permissions on to the one that
-    /// replaces it, as far as the server gives them to a new file; the new
-    /// file belongs to whoever uploaded it.
+    ///
+    /// A new file is made with the local file's permissions, and a file that
+    /// is replaced passes its own on to the one that replaces it, both
+    /// within what the server's mask for new files allows. The new file
+    /// belongs to whoever uploaded it, and is dated as of the upload.
     ///
     /// - Parameter progress: Called as the server confirms data with the
     ///   bytes confirmed so far and the file's size.
@@ -80,6 +86,10 @@ extension SFTPClient {
     /// The whole directory is looked through before anything is written, and
     /// one that holds more than ``maximumTreeEntries`` files and folders is
     /// not taken on.
+    ///
+    /// Files are copied as ``download(remotePath:to:progress:)`` copies them.
+    /// A folder that is made here lets the same others in as the remote one
+    /// does; the owner can always write to it.
     ///
     /// - Parameter progress: Called with the bytes received so far across all
     ///   files and the total found when the directory was first walked.
@@ -107,7 +117,8 @@ extension SFTPClient {
         // directory, the empty path being the directory itself: a path is
         // all it takes to find them at either end, and what is kept per
         // entry decides how large a tree can be walked.
-        var folders = [""]
+        let root = try await entryIfPresent(at: remotePath, followingSymlinks: true)
+        var folders = [(path: "", permissions: root?.copiedFolderPermissions)]
         var files: [String] = []
         var total: Int64 = 0
         var keptBytes = 0
@@ -142,7 +153,7 @@ extension SFTPClient {
                     throw SFTPError.tooManyEntries(limit: Self.maximumTreeEntries)
                 }
                 if isFolder {
-                    folders.append(path)
+                    folders.append((path, entry.attributes.copiedFolderPermissions))
                     unvisited.append(path)
                 } else {
                     files.append(path)
@@ -152,9 +163,11 @@ extension SFTPClient {
         }
 
         // Parents were found before their children, so creating the folders
-        // in this order always finds the parent in place.
+        // in this order always finds the parent in place. Only the folder
+        // the copy goes to may have to have its own parents made.
         for folder in folders {
-            try LocalFile.createDirectory(at: local(folder))
+            try LocalFile.createDirectory(
+                at: local(folder.path), permissions: folder.permissions, withParents: folder.path.isEmpty)
         }
         let expectedTotal = total
         var completed: Int64 = 0
@@ -177,6 +190,10 @@ extension SFTPClient {
     /// needed and merged into if it exists. Symbolic links and special files
     /// are skipped.
     ///
+    /// Files are copied as ``upload(localURL:to:progress:)`` copies them. A
+    /// folder that is made on the server lets the same others in as the
+    /// local one does; the owner can always write to it.
+    ///
     /// - Parameter progress: Called with the bytes confirmed so far across
     ///   all files and their total size.
     public nonisolated func uploadDirectory(
@@ -186,7 +203,7 @@ extension SFTPClient {
     ) async throws {
         // Parents are found before their children, so creating the remote
         // directories in this order always finds the parent in place.
-        var directories = [remotePath]
+        var directories = [(path: remotePath, permissions: try LocalFile.folderPermissions(of: localURL))]
         var files: [(localURL: URL, remotePath: String)] = []
         var total: Int64 = 0
         var unvisited = [(localURL: localURL, remotePath: remotePath)]
@@ -195,8 +212,8 @@ extension SFTPClient {
             for child in try LocalFile.contents(of: directory.localURL) {
                 let childPath = SFTPPath.join(directory.remotePath, child.url.lastPathComponent)
                 switch child.kind {
-                case .directory:
-                    directories.append(childPath)
+                case .directory(let permissions):
+                    directories.append((childPath, permissions))
                     unvisited.append((child.url, childPath))
                 case .file(let size):
                     files.append((child.url, childPath))
@@ -208,7 +225,7 @@ extension SFTPClient {
         }
 
         for directory in directories {
-            try await makeDirectoryIfMissing(directory)
+            try await makeDirectoryIfMissing(directory.path, permissions: directory.permissions)
         }
         let expectedTotal = total
         var completed: Int64 = 0
@@ -236,16 +253,18 @@ extension SFTPClient {
         let handle = try await open(remotePath, flags: .read)
         let received: Int64
         do {
-            // The size is only a hint, for progress and for pacing; a server
-            // that will not say is not a reason to fail.
-            let size = try await attributesIfOffered(of: handle)?.size.map { Int64(clamping: $0) }
+            // The size is only a hint, for progress and for pacing, and the
+            // permissions and the date are niceties; a server that will not
+            // say is not a reason to fail.
+            let remote = try await attributesIfOffered(of: handle)
+            let size = remote?.size.map { Int64(clamping: $0) }
             // Written beside the destination and moved over it when every
             // byte is there. Until then, and if it never comes to that,
             // what is at the destination stays as it is.
-            let file = try LocalFile(replacing: localURL)
+            let file = try LocalFile(replacing: localURL, permissions: remote?.copiedPermissions)
             do {
                 received = try await fetch(handle, into: file, expectedSize: size, progress: progress)
-                try file.finish()
+                try file.finish(modified: remote?.modificationDate)
             } catch {
                 file.abandon()
                 throw error
@@ -258,12 +277,16 @@ extension SFTPClient {
         return received
     }
 
-    /// What is at `path` on the server, the entry itself and not what a link
-    /// there points to; `nil` when the server says nothing is, or refuses to
-    /// say.
-    private nonisolated func entryIfPresent(at path: String) async throws -> SFTPAttributes? {
+    /// What is at `path` on the server; `nil` when the server says nothing
+    /// is, or refuses to say.
+    ///
+    /// - Parameter followingSymlinks: Whether a link at `path` is looked
+    ///   through, or is itself what is described.
+    private nonisolated func entryIfPresent(
+        at path: String, followingSymlinks: Bool = false
+    ) async throws -> SFTPAttributes? {
         do {
-            return try await attributes(of: path, followSymlinks: false)
+            return try await attributes(of: path, followSymlinks: followingSymlinks)
         } catch let error as SFTPError where error.statusCode != nil {
             return nil
         }
@@ -381,12 +404,14 @@ extension SFTPClient {
         progress: SFTPProgressHandler?
     ) async throws -> Int64 {
         let file = try LocalFile(reading: localURL)
-        let size = try file.size()
+        let (size, ownPermissions) = try file.status()
         // A file that is replaced hands its permissions on to its
         // replacement: putting new contents into a file that was private
-        // must not make it public.
+        // must not make it public. A new file is as private as the one it
+        // is a copy of.
         let replaced = try await entryIfPresent(at: remotePath)
-        let permissions = replaced?.isRegularFile == true ? replaced?.permissions : nil
+        let permissions = replaced?.isRegularFile == true
+            ? replaced?.copiedPermissions ?? ownPermissions : ownPermissions
         // Written under a name of its own beside the destination, which is
         // not touched until the whole file is on the server. The name is
         // new, so the file is created and must not be there already.
@@ -461,10 +486,11 @@ extension SFTPClient {
         }
     }
 
-    /// Creates a remote directory unless it is already there.
-    private nonisolated func makeDirectoryIfMissing(_ path: String) async throws {
+    /// Creates a remote directory unless it is already there. One that is
+    /// there is left as it is, permissions included.
+    private nonisolated func makeDirectoryIfMissing(_ path: String, permissions: UInt16) async throws {
         do {
-            try await makeDirectory(path)
+            try await makeDirectory(path, permissions: permissions)
         } catch let error as SFTPError where error.statusCode != nil {
             // Version 3 has no "already exists" code, only a general failure,
             // so ask what is at the path before giving up.
@@ -514,7 +540,11 @@ final class LocalFile {
     /// moves that file over `url` in one step, so what is at `url` is whole
     /// at every moment: the old file, then the new one. ``abandon()``
     /// deletes it and leaves `url` as it was.
-    convenience init(replacing url: URL) throws(SFTPError) {
+    ///
+    /// - Parameter permissions: Who may read, write and run the file if it is
+    ///   a new one, within what the user's mask for new files allows. A file
+    ///   that replaces another takes that one's permissions instead.
+    convenience init(replacing url: URL, permissions: UInt16? = nil) throws(SFTPError) {
         let path = url.path(percentEncoded: false)
         let temporaryPath = url.deletingLastPathComponent()
             .appending(path: SFTPPath.temporaryName(kind: "partial"))
@@ -527,8 +557,9 @@ final class LocalFile {
         // The file is new by its name; if something is there after all, it
         // is not this transfer's to write into. Where nothing is replaced,
         // the mode is narrowed by the user's umask as usual.
+        let newMode = permissions.map { mode_t($0 & 0o777) } ?? 0o666
         let descriptor = Darwin.open(
-            temporaryPath, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, replacedMode ?? 0o666)
+            temporaryPath, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, replacedMode ?? newMode)
         guard descriptor >= 0 else {
             throw Self.failure(path: path, code: errno)
         }
@@ -553,12 +584,13 @@ final class LocalFile {
         }
     }
 
-    func size() throws(SFTPError) -> Int64 {
+    /// How large the file is, and who may read, write and run it.
+    func status() throws(SFTPError) -> (size: Int64, permissions: UInt16) {
         var status = stat()
         guard fstat(descriptor, &status) == 0 else {
             throw Self.failure(path: path, code: errno)
         }
-        return Int64(status.st_size)
+        return (Int64(status.st_size), UInt16(status.st_mode & 0o777))
     }
 
     /// Where a run of `length` bytes at `offset` starts, as the system counts
@@ -636,10 +668,26 @@ final class LocalFile {
     /// Completes a file started with ``init(replacing:)``: closes it and
     /// moves it into the place of what it replaces. If that cannot be done,
     /// what there is of it is deleted and the destination is left as it was.
-    func finish() throws(SFTPError) {
+    ///
+    /// - Parameter modified: When the file's contents were last changed, as
+    ///   far as the place they came from knows. The file is dated then, and
+    ///   as of now when this is `nil`.
+    func finish(modified: Date? = nil) throws(SFTPError) {
         guard let temporaryPath else {
             try close()
             return
+        }
+        if let modified, descriptor >= 0 {
+            // The time of last access is left alone. A date that cannot be
+            // set is no reason to give up a file that is otherwise complete.
+            let seconds = modified.timeIntervalSince1970.rounded(.down)
+            let times = [
+                timespec(tv_sec: 0, tv_nsec: Int(UTIME_OMIT)),
+                timespec(
+                    tv_sec: Int(seconds),
+                    tv_nsec: Int((modified.timeIntervalSince1970 - seconds) * 1_000_000_000)),
+            ]
+            futimens(descriptor, times)
         }
         do {
             try close()
@@ -670,41 +718,83 @@ final class LocalFile {
     // MARK: Directories
 
     enum Kind {
-        case directory
+        /// A folder, with the permissions a copy of it is given: who may
+        /// list, change and enter it, the owner always being among them.
+        case directory(permissions: UInt16)
         case file(size: Int64)
         /// A symbolic link or a special file.
         case other
     }
 
-    /// Creates a directory, and any missing parents, unless it exists.
-    static func createDirectory(at url: URL) throws(SFTPError) {
-        do {
-            try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
-        } catch {
-            throw .localFile(path: url.path(percentEncoded: false), reason: error.localizedDescription)
+    /// Creates a directory unless it exists. One that exists is left as it
+    /// is, permissions included.
+    ///
+    /// - Parameters:
+    ///   - permissions: Who may list, change and enter the directory, within
+    ///     what the user's mask for new files allows; everyone that mask
+    ///     allows, when `nil`.
+    ///   - withParents: Whether the folders above it are created too where
+    ///     they are missing.
+    static func createDirectory(
+        at url: URL, permissions: UInt16? = nil, withParents: Bool = false
+    ) throws(SFTPError) {
+        let path = url.path(percentEncoded: false)
+        let mode = permissions.map { mode_t($0 & 0o777) } ?? 0o777
+        if mkdir(path, mode) == 0 { return }
+        var code = errno
+        if code == ENOENT, withParents {
+            do {
+                try FileManager.default.createDirectory(
+                    at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            } catch {
+                throw .localFile(path: path, reason: error.localizedDescription)
+            }
+            if mkdir(path, mode) == 0 { return }
+            code = errno
         }
+        // Something has the name. A folder, or a link to one, will do.
+        var status = stat()
+        if code == EEXIST, stat(path, &status) == 0, status.st_mode & S_IFMT == S_IFDIR { return }
+        throw failure(path: path, code: code)
+    }
+
+    /// The permissions a copy of the folder at `url` is given.
+    static func folderPermissions(of url: URL) throws(SFTPError) -> UInt16 {
+        let path = url.path(percentEncoded: false)
+        var status = stat()
+        guard stat(path, &status) == 0 else {
+            throw failure(path: path, code: errno)
+        }
+        return UInt16(status.st_mode & 0o777) | 0o700
     }
 
     /// The entries of a directory, sorted by name. Links are reported as
     /// links, not as what they point to.
     static func contents(of url: URL) throws(SFTPError) -> [(url: URL, kind: Kind)] {
-        let keys: Set<URLResourceKey> = [.isDirectoryKey, .isRegularFileKey, .fileSizeKey]
+        let children: [URL]
         do {
-            return try FileManager.default
-                .contentsOfDirectory(at: url, includingPropertiesForKeys: Array(keys))
+            children = try FileManager.default
+                .contentsOfDirectory(at: url, includingPropertiesForKeys: nil)
                 .sorted { $0.lastPathComponent < $1.lastPathComponent }
-                .map { child -> (url: URL, kind: Kind) in
-                    let values = try child.resourceValues(forKeys: keys)
-                    if values.isDirectory == true {
-                        return (child, .directory)
-                    }
-                    if values.isRegularFile == true {
-                        return (child, .file(size: Int64(values.fileSize ?? 0)))
-                    }
-                    return (child, .other)
-                }
         } catch {
             throw .localFile(path: url.path(percentEncoded: false), reason: error.localizedDescription)
         }
+        var contents: [(url: URL, kind: Kind)] = []
+        for child in children {
+            let path = child.path(percentEncoded: false)
+            var status = stat()
+            guard lstat(path, &status) == 0 else {
+                throw failure(path: path, code: errno)
+            }
+            switch status.st_mode & S_IFMT {
+            case S_IFDIR:
+                contents.append((child, .directory(permissions: UInt16(status.st_mode & 0o777) | 0o700)))
+            case S_IFREG:
+                contents.append((child, .file(size: Int64(status.st_size))))
+            default:
+                contents.append((child, .other))
+            }
+        }
+        return contents
     }
 }

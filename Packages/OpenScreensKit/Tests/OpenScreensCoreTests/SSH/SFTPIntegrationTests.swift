@@ -335,6 +335,124 @@ extension SSHTests.SSHIntegrationTests {
         }
     }
 
+    // MARK: Permissions and dates
+
+    private static func permissions(_ url: URL) throws -> Int {
+        let value = try FileManager.default.attributesOfItem(atPath: url.path)[.posixPermissions]
+        return try #require((value as? NSNumber)?.intValue)
+    }
+
+    private static func setPermissions(_ permissions: Int, of url: URL) throws {
+        try FileManager.default.setAttributes([.posixPermissions: permissions], ofItemAtPath: url.path)
+    }
+
+    /// What became of `original` at the receiving end, where new files are
+    /// made under a mask that may take permissions away: nothing was added,
+    /// and what the owner may do, which no mask in use takes away, is as it
+    /// was.
+    private static func expectCarried(
+        _ carried: Int, from original: Int, _ comment: Comment,
+        sourceLocation: SourceLocation = #_sourceLocation
+    ) {
+        #expect(carried & ~original == 0, comment, sourceLocation: sourceLocation)
+        #expect(carried & 0o700 == original & 0o700, comment, sourceLocation: sourceLocation)
+    }
+
+    @Test func aFileKeepsItsPermissionsOnTheWayUp() async throws {
+        try await PrivateSSHServer.run { server in
+            let local = try TemporaryDirectory()
+            let client = try await server.connect()
+            let sftp = try await client.openSFTP()
+
+            // A private key, a script, an ordinary file, and one with bits
+            // that are not to travel at all.
+            for (name, mode) in [("id_ed25519", 0o600), ("deploy.sh", 0o755), ("notes.txt", 0o644), ("odd", 0o4750)] {
+                let source = local.file(name)
+                try Data(name.utf8).write(to: source)
+                try Self.setPermissions(mode, of: source)
+                let remote = server.directory.appending(path: name)
+                try await sftp.upload(localURL: source, to: remote.path)
+
+                let arrived = try Self.permissions(remote)
+                Self.expectCarried(arrived, from: mode & 0o777, "\(name) arrived as \(String(arrived, radix: 8))")
+            }
+            #expect(try Self.permissions(server.directory.appending(path: "id_ed25519")) == 0o600)
+            await client.close()
+        }
+    }
+
+    @Test func aFileKeepsItsPermissionsAndItsDateOnTheWayDown() async throws {
+        try await PrivateSSHServer.run { server in
+            let local = try TemporaryDirectory()
+            let client = try await server.connect()
+            let sftp = try await client.openSFTP()
+            let written = Date(timeIntervalSince1970: 981_173_106)
+
+            for (name, mode) in [("id_ed25519", 0o600), ("deploy.sh", 0o755), ("notes.txt", 0o644), ("odd", 0o6751)] {
+                let remote = server.directory.appending(path: name)
+                try Data(name.utf8).write(to: remote)
+                try Self.setPermissions(mode, of: remote)
+                try FileManager.default.setAttributes([.modificationDate: written], ofItemAtPath: remote.path)
+                let copy = local.file(name)
+                try await sftp.download(remotePath: remote.path, to: copy)
+
+                let arrived = try Self.permissions(copy)
+                Self.expectCarried(arrived, from: mode & 0o777, "\(name) arrived as \(String(arrived, radix: 8))")
+                let modified = try FileManager.default.attributesOfItem(atPath: copy.path)[.modificationDate]
+                #expect(modified as? Date == written, "\(name)")
+            }
+            #expect(try Self.permissions(local.file("id_ed25519")) == 0o600)
+            await client.close()
+        }
+    }
+
+    @Test func foldersKeepWhoElseMayLookIntoThem() async throws {
+        try await PrivateSSHServer.run { server in
+            let local = try TemporaryDirectory()
+            let client = try await server.connect()
+            let sftp = try await client.openSFTP()
+
+            // A private folder with a private file in it, and beside it a
+            // folder nobody may write to, the owner included.
+            let tree = local.file("tree")
+            for (folder, mode) in [("private", 0o700), ("readonly", 0o555)] {
+                let url = tree.appending(path: folder)
+                try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+                try Data("secret".utf8).write(to: url.appending(path: "key"))
+                try Self.setPermissions(0o600, of: url.appending(path: "key"))
+                try Self.setPermissions(mode, of: url)
+            }
+            try Self.setPermissions(0o750, of: tree)
+            defer { try? Self.setPermissions(0o755, of: tree.appending(path: "readonly")) }
+
+            func expectCopy(at root: URL, sourceLocation: SourceLocation = #_sourceLocation) throws {
+                Self.expectCarried(try Self.permissions(root), from: 0o750, "the folder itself", sourceLocation: sourceLocation)
+                #expect(try Self.permissions(root.appending(path: "private")) == 0o700, sourceLocation: sourceLocation)
+                #expect(try Self.permissions(root.appending(path: "private/key")) == 0o600, sourceLocation: sourceLocation)
+                // The owner can always write to the copy of a folder: it had
+                // to be filled. Nobody else gained anything.
+                let readonly = try Self.permissions(root.appending(path: "readonly"))
+                #expect(readonly & 0o700 == 0o700, sourceLocation: sourceLocation)
+                #expect(readonly & ~0o755 == 0, sourceLocation: sourceLocation)
+                #expect(try Data(contentsOf: root.appending(path: "readonly/key")) == Data("secret".utf8),
+                        sourceLocation: sourceLocation)
+            }
+
+            let remote = server.directory.appending(path: "tree")
+            try await sftp.uploadDirectory(localURL: tree, to: remote.path)
+            try expectCopy(at: remote)
+
+            // The owner's own write permission is taken away again on the
+            // server, as it was on the folder the copy was made from.
+            try Self.setPermissions(0o555, of: remote.appending(path: "readonly"))
+            defer { try? Self.setPermissions(0o755, of: remote.appending(path: "readonly")) }
+            let copy = local.file("copy")
+            try await sftp.downloadDirectory(remotePath: remote.path, to: copy)
+            try expectCopy(at: copy)
+            await client.close()
+        }
+    }
+
     @Test func replacingAFileDoesNotChangeWhoMayReadIt() async throws {
         try await PrivateSSHServer.run { server in
             let local = try TemporaryDirectory()

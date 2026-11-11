@@ -141,6 +141,21 @@ public struct SFTPAttributes: Hashable, Sendable {
     public var permissions: UInt16? {
         mode.map { UInt16($0 & 0o7777) }
     }
+
+    /// The permissions a copy of the file is given: who may read, write and
+    /// run it. Running as the owner or the group, and the sticky bit, mean
+    /// something on the computer they were set on and are not handed to
+    /// another one.
+    var copiedPermissions: UInt16? {
+        permissions.map { $0 & 0o777 }
+    }
+
+    /// The permissions a copy of the folder is given: ``copiedPermissions``,
+    /// except that whoever makes the copy can always list, change and enter
+    /// it, because it has to be filled.
+    var copiedFolderPermissions: UInt16? {
+        copiedPermissions.map { $0 | 0o700 }
+    }
 }
 
 /// One entry of a remote directory.

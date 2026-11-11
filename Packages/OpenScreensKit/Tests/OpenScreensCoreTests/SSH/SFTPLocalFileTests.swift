@@ -140,5 +140,88 @@ extension SSHTests {
             let error = #expect(throws: SFTPError.self) { _ = try LocalFile(replacing: url) }
             #expect(error == .localFile(path: url.path, reason: String(cString: strerror(ENOENT))))
         }
+
+        // MARK: Permissions and dates
+
+        private func permissions(_ url: URL) throws -> Int {
+            let value = try FileManager.default.attributesOfItem(atPath: url.path)[.posixPermissions]
+            return try #require((value as? NSNumber)?.intValue)
+        }
+
+        @Test func aNewFileIsAsPrivateAsItIsToldToBeAndDatedAsItIsTold() throws {
+            let directory = try TemporaryDirectory()
+            let url = directory.file("key")
+            // Only the nine ordinary bits are ever taken.
+            let file = try LocalFile(replacing: url, permissions: 0o6600)
+            try file.write(Self.new, at: 0)
+            let written = Date(timeIntervalSince1970: 981_173_106)
+            try file.finish(modified: written)
+
+            #expect(try permissions(url) == 0o600)
+            #expect(try FileManager.default.attributesOfItem(atPath: url.path)[.modificationDate] as? Date == written)
+        }
+
+        @Test func aFileThatIsReplacedKeepsItsOwnPermissions() throws {
+            let directory = try TemporaryDirectory()
+            for (name, mode) in [("private", 0o600), ("shared", 0o666), ("tool", 0o750)] {
+                let url = directory.file(name)
+                try Self.old.write(to: url)
+                try FileManager.default.setAttributes([.posixPermissions: mode], ofItemAtPath: url.path)
+
+                // Whatever the new contents came with, and whatever the mask
+                // for new files would have made of that.
+                let file = try LocalFile(replacing: url, permissions: 0o644)
+                try file.write(Self.new, at: 0)
+                try file.finish()
+                #expect(try permissions(url) == mode, "\(name)")
+                #expect(try Data(contentsOf: url) == Data(Self.new.readableBytesView), "\(name)")
+            }
+        }
+
+        @Test func aFolderIsMadeWithThePermissionsItIsGivenAndLeftAloneIfItIsThere() throws {
+            let directory = try TemporaryDirectory()
+            let folder = directory.file("private")
+            try LocalFile.createDirectory(at: folder, permissions: 0o700)
+            #expect(try permissions(folder) == 0o700)
+
+            // Asking again changes nothing about a folder that exists.
+            try LocalFile.createDirectory(at: folder, permissions: 0o755)
+            #expect(try permissions(folder) == 0o700)
+
+            // A folder whose own folder is missing is made only when asked.
+            let deep = directory.file("a/b/c")
+            #expect(throws: SFTPError.self) { try LocalFile.createDirectory(at: deep) }
+            try LocalFile.createDirectory(at: deep, permissions: 0o700, withParents: true)
+            #expect(try permissions(deep) == 0o700)
+
+            // A file with the name is in the way, and stays.
+            let file = directory.file("file")
+            try Self.old.write(to: file)
+            let error = #expect(throws: SFTPError.self) { try LocalFile.createDirectory(at: file) }
+            #expect(error == .localFile(path: file.path, reason: String(cString: strerror(EEXIST))))
+            #expect(try Data(contentsOf: file) == Self.old)
+        }
+
+        @Test func whatAFolderHoldsIsToldApartWithoutFollowingLinks() throws {
+            let directory = try TemporaryDirectory()
+            let folder = directory.file("folder")
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false)
+            try FileManager.default.setAttributes([.posixPermissions: 0o550], ofItemAtPath: folder.path)
+            try Self.old.write(to: directory.file("file"))
+            try FileManager.default.createSymbolicLink(at: directory.file("link"), withDestinationURL: folder)
+
+            let contents = try LocalFile.contents(of: directory.url)
+            #expect(contents.map(\.url.lastPathComponent) == ["file", "folder", "link"])
+            guard case .file(let size) = contents[0].kind,
+                  case .directory(let permissions) = contents[1].kind,
+                  case .other = contents[2].kind else {
+                Issue.record("unexpected kinds: \(contents.map(\.kind))")
+                return
+            }
+            #expect(size == Int64(Self.old.count))
+            // Whoever copies the folder will have to be able to fill it.
+            #expect(permissions == 0o750)
+            #expect(try LocalFile.folderPermissions(of: folder) == 0o750)
+        }
     }
 }

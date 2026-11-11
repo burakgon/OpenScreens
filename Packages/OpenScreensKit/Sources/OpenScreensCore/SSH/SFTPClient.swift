@@ -452,8 +452,13 @@ public actor SFTPClient {
     // MARK: Changing
 
     /// Creates a directory. Its parent must exist.
-    public func makeDirectory(_ path: String) async throws {
-        try expectSuccess(await exchange { .mkdir(id: $0, path: path, attributes: SFTPAttributes()) })
+    ///
+    /// - Parameter permissions: Who may list, change and enter the directory;
+    ///   `nil` leaves that to the server. The server's own mask for new
+    ///   directories still applies, and only the nine ordinary bits are sent.
+    public func makeDirectory(_ path: String, permissions: UInt16? = nil) async throws {
+        let attributes = SFTPAttributes(mode: permissions.map { UInt32($0 & 0o777) })
+        try expectSuccess(await exchange { .mkdir(id: $0, path: path, attributes: attributes) })
     }
 
     /// Deletes a file or a symbolic link.
