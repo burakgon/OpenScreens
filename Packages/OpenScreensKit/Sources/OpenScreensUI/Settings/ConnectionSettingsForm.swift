@@ -17,6 +17,11 @@ struct ConnectionSettingsForm: View {
 
     var body: some View {
         pictureSection
+        #if os(iOS)
+        if PictureInPicture.isSupported {
+            pictureInPictureSection
+        }
+        #endif
         if kind.isApple {
             soundSection
         }
@@ -117,6 +122,39 @@ struct ConnectionSettingsForm: View {
             }
         }
     }
+
+    #if os(iOS)
+    private var pictureInPictureSection: some View {
+        Section {
+            Picker("Picture in Picture", selection: $settings.pictureInPicture) {
+                ForEach(PictureInPictureMode.allCases) { mode in
+                    Text(mode.title).tag(mode)
+                }
+            }
+            if settings.pictureInPicture != .off {
+                Picker("Frame Rate", selection: $settings.pictureInPictureFrameRate) {
+                    ForEach(PictureInPictureFrameRate.allCases) { rate in
+                        Text(rate.title).tag(rate)
+                    }
+                }
+                PictureInPictureKeyRow(
+                    title: "Skip Back", shortcut: $settings.pictureInPictureKeys.skipBack, kind: kind)
+                PictureInPictureKeyRow(
+                    title: "Play/Pause", shortcut: $settings.pictureInPictureKeys.playPause, kind: kind)
+                PictureInPictureKeyRow(
+                    title: "Skip Forward", shortcut: $settings.pictureInPictureKeys.skipForward, kind: kind)
+            }
+        } header: {
+            Text("Picture in Picture")
+        } footer: {
+            // Every choice at once: the difference between them is the point.
+            Text(settings.pictureInPicture == .off ? Self.modesFooter : "\(Self.modesFooter) \(Self.keysFooter)")
+        }
+    }
+
+    private static let modesFooter = "Keep the screen in view while you use other apps. On Demand adds a button to a session's controls. Automatically does it whenever you leave the app during a session: more convenient, but it uses more battery."
+    private static let keysFooter = "The window's skip and play buttons send the keys you choose, such as F13 to F15, to the remote computer."
+    #endif
 
     private var soundSection: some View {
         Section {
@@ -230,6 +268,47 @@ struct ConnectionSettingsForm: View {
         }
     }
 }
+
+#if os(iOS)
+/// Chooses the key one of the Picture in Picture window's buttons sends.
+private struct PictureInPictureKeyRow: View {
+    let title: String
+    @Binding var shortcut: RemoteShortcut?
+    let kind: ComputerKind
+    @State private var editing: RemoteShortcut?
+
+    var body: some View {
+        LabeledContent(title) {
+            if let shortcut {
+                HStack(spacing: 8) {
+                    Button {
+                        editing = shortcut
+                    } label: {
+                        KeyCap(shortcut.displayString(for: kind))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("\(title): \(shortcut.displayString(for: kind))")
+                    Button("Send Nothing", systemImage: "xmark.circle.fill") {
+                        self.shortcut = nil
+                    }
+                    .labelStyle(.iconOnly)
+                    .foregroundStyle(.secondary)
+                    .buttonStyle(.plain)
+                }
+            } else {
+                Button("Choose…") {
+                    editing = RemoteShortcut(name: title, key: .function(13))
+                }
+            }
+        }
+        .sheet(item: $editing) { shortcut in
+            ShortcutEditor(shortcut: shortcut, asksForName: false, title: title) { saved in
+                self.shortcut = saved
+            }
+        }
+    }
+}
+#endif
 
 /// Chooses which SSH key a computer signs in with.
 struct SSHKeyPicker: View {

@@ -52,6 +52,10 @@
 	<string>OpenScreens uses Face ID to keep your saved computers private.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>OpenScreens looks for computers on your network that you can connect to, and connects to the ones you choose.</string>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>audio</string>
+	</array>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

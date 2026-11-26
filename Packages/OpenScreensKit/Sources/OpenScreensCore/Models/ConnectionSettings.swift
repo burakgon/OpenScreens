@@ -29,6 +29,16 @@ public struct ConnectionSettings: Codable, Hashable, Sendable {
     /// Hold video back so it stays in step with remote sound.
     public var syncVideoToAudio: Bool
 
+    // MARK: Picture in Picture
+
+    /// Whether a session on iPhone and iPad can go into Picture in Picture,
+    /// and whether it does so by itself when the app is left.
+    public var pictureInPicture: PictureInPictureMode
+    /// How often the Picture in Picture window is drawn.
+    public var pictureInPictureFrameRate: PictureInPictureFrameRate
+    /// What the window's own buttons send to the remote computer.
+    public var pictureInPictureKeys: PictureInPictureKeys
+
     // MARK: Control
 
     /// Watch without sending any keyboard, pointer or clipboard input.
@@ -73,6 +83,9 @@ public struct ConnectionSettings: Codable, Hashable, Sendable {
         brightnessBoost: Double = 1.0,
         remoteAudio: Bool = true,
         syncVideoToAudio: Bool = false,
+        pictureInPicture: PictureInPictureMode = .onDemand,
+        pictureInPictureFrameRate: PictureInPictureFrameRate = .fifteen,
+        pictureInPictureKeys: PictureInPictureKeys = PictureInPictureKeys(),
         observeOnly: Bool = false,
         cursor: CursorMode = .local,
         touchInput: TouchInputMode = .trackpad,
@@ -100,6 +113,9 @@ public struct ConnectionSettings: Codable, Hashable, Sendable {
         self.brightnessBoost = brightnessBoost
         self.remoteAudio = remoteAudio
         self.syncVideoToAudio = syncVideoToAudio
+        self.pictureInPicture = pictureInPicture
+        self.pictureInPictureFrameRate = pictureInPictureFrameRate
+        self.pictureInPictureKeys = pictureInPictureKeys
         self.observeOnly = observeOnly
         self.cursor = cursor
         self.touchInput = touchInput
@@ -140,6 +156,14 @@ public struct ConnectionSettings: Codable, Hashable, Sendable {
         brightnessBoost = try number(.brightnessBoost, in: 0.25...4, default: d.brightnessBoost)
         remoteAudio = try c.decodeIfPresent(Bool.self, forKey: .remoteAudio) ?? d.remoteAudio
         syncVideoToAudio = try c.decodeIfPresent(Bool.self, forKey: .syncVideoToAudio) ?? d.syncVideoToAudio
+        pictureInPicture = try c.decodeIfPresent(PictureInPictureMode.self, forKey: .pictureInPicture)
+            ?? d.pictureInPicture
+        pictureInPictureFrameRate = try c.decodeIfPresent(
+            PictureInPictureFrameRate.self, forKey: .pictureInPictureFrameRate) ?? d.pictureInPictureFrameRate
+        // A key this version cannot read leaves the buttons sending nothing,
+        // not the computer without its settings.
+        pictureInPictureKeys = (try? c.decodeIfPresent(PictureInPictureKeys.self, forKey: .pictureInPictureKeys))
+            ?? d.pictureInPictureKeys
         observeOnly = try c.decodeIfPresent(Bool.self, forKey: .observeOnly) ?? d.observeOnly
         cursor = try c.decodeIfPresent(CursorMode.self, forKey: .cursor) ?? d.cursor
         touchInput = try c.decodeIfPresent(TouchInputMode.self, forKey: .touchInput) ?? d.touchInput
@@ -359,6 +383,90 @@ public enum ColorDepth: String, Codable, CaseIterable, Identifiable, Sendable {
     public init(from decoder: any Decoder) throws {
         let raw = try decoder.singleValueContainer().decode(String.self)
         self = ColorDepth(rawValue: raw) ?? .full
+    }
+}
+
+/// When a session's remote screen can go into Picture in Picture.
+public enum PictureInPictureMode: String, Codable, CaseIterable, Identifiable, Sendable {
+    /// From a button among the session's controls.
+    case onDemand
+    /// From the button, and by itself when the app is left during a session.
+    case automatic
+    case off
+
+    public var id: Self { self }
+
+    public var title: String {
+        switch self {
+        case .onDemand: "On Demand"
+        case .automatic: "Automatically"
+        case .off: "Off"
+        }
+    }
+
+    /// A choice this version does not know is read as the default.
+    public init(from decoder: any Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        self = PictureInPictureMode(rawValue: raw) ?? .onDemand
+    }
+}
+
+/// How often the Picture in Picture window is drawn.
+public enum PictureInPictureFrameRate: String, Codable, CaseIterable, Identifiable, Sendable {
+    /// Enough to see a build finish or a window move, at the least cost.
+    case fifteen
+    case thirty
+    /// Every new picture, as the session gets it.
+    case full
+
+    public var id: Self { self }
+
+    public var title: String {
+        switch self {
+        case .fifteen: "15 fps"
+        case .thirty: "30 fps"
+        case .full: "Full"
+        }
+    }
+
+    /// Frames a second, or nil for every picture as it comes.
+    public var framesPerSecond: Int? {
+        switch self {
+        case .fifteen: 15
+        case .thirty: 30
+        case .full: nil
+        }
+    }
+
+    /// A rate this version does not know is read as the default.
+    public init(from decoder: any Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        self = PictureInPictureFrameRate(rawValue: raw) ?? .fifteen
+    }
+}
+
+/// What the Picture in Picture window's skip and play buttons send to the
+/// remote computer: keys of the user's choosing, such as F13 to F15, for
+/// the remote computer to act on as it is set up to. A button with nothing
+/// to send does nothing.
+public struct PictureInPictureKeys: Codable, Hashable, Sendable {
+    public var skipBack: RemoteShortcut?
+    public var playPause: RemoteShortcut?
+    public var skipForward: RemoteShortcut?
+
+    public init(
+        skipBack: RemoteShortcut? = nil,
+        playPause: RemoteShortcut? = nil,
+        skipForward: RemoteShortcut? = nil
+    ) {
+        self.skipBack = skipBack
+        self.playPause = playPause
+        self.skipForward = skipForward
+    }
+
+    /// Whether either skip button has something to send.
+    public var skips: Bool {
+        skipBack != nil || skipForward != nil
     }
 }
 

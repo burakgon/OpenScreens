@@ -18,6 +18,7 @@ struct SessionScreen: View {
     /// being held.
     @State private var deckChoice: Bool? = SessionScreen.initialDeckChoice
     @State private var hardwareKeyboard = HardwareKeyboardMonitor()
+    @State private var pictureInPicture: PictureInPicture?
 
     private var bridge: CanvasBridge { session.canvasBridge }
 
@@ -41,6 +42,10 @@ struct SessionScreen: View {
             let deckHeight = deckVisible ? deckHeight(in: geometry.size) : 0
 
             ZStack(alignment: .bottom) {
+                if let pictureInPicture {
+                    PictureInPictureLayer(pictureInPicture: pictureInPicture)
+                }
+
                 SessionView(session: session, onClose: onClose)
 
                 if deckVisible {
@@ -64,6 +69,8 @@ struct SessionScreen: View {
                         session: session,
                         deckIsOut: deckVisible,
                         showsHardwareKeyboardHint: hardwareKeyboard.isAttached,
+                        // Automatically, leaving the app is the way in.
+                        pictureInPicture: session.settings.pictureInPicture == .onDemand ? pictureInPicture : nil,
                         onToggleDeck: { deckChoice = !deckVisible },
                         onCurtain: toggleCurtain,
                         onSettings: { showsSettings = true },
@@ -102,9 +109,20 @@ struct SessionScreen: View {
         }
         .onChange(of: session.isConnected, initial: true) { _, connected in
             UIApplication.shared.isIdleTimerDisabled = connected && model.settings.keepsDisplayAwake
+            followPictureInPicture()
+        }
+        .onChange(of: session.settings.pictureInPicture) {
+            followPictureInPicture()
+        }
+        .onChange(of: session.settings.pictureInPictureFrameRate) {
+            followPictureInPicture()
+        }
+        .onChange(of: session.settings.pictureInPictureKeys) {
+            followPictureInPicture()
         }
         .onDisappear {
             UIApplication.shared.isIdleTimerDisabled = false
+            pictureInPicture?.end()
         }
         .onChange(of: hardwareKeyboard.isAttached, initial: true) { _, attached in
             bridge.hasHardwareKeyboard = attached
@@ -112,6 +130,26 @@ struct SessionScreen: View {
                 bridge.hideKeyboard()
             }
         }
+    }
+
+    /// Picture in Picture as the settings have it, for a connected session.
+    private func followPictureInPicture() {
+        let mode = session.settings.pictureInPicture
+        guard mode != .off, PictureInPicture.isSupported else {
+            pictureInPicture?.end()
+            pictureInPicture = nil
+            return
+        }
+        guard session.isConnected else {
+            pictureInPicture?.end()
+            return
+        }
+        let pictureInPicture = pictureInPicture ?? PictureInPicture(session: session)
+        self.pictureInPicture = pictureInPicture
+        pictureInPicture.frameRate = session.settings.pictureInPictureFrameRate
+        pictureInPicture.keys = session.settings.pictureInPictureKeys
+        pictureInPicture.startsAutomatically = mode == .automatic
+        pictureInPicture.prepare()
     }
 
     private func deckHeight(in size: CGSize) -> CGFloat {
@@ -183,6 +221,8 @@ struct SessionControls: View {
     let session: RemoteSession
     let deckIsOut: Bool
     let showsHardwareKeyboardHint: Bool
+    /// Nil where there is no button for Picture in Picture.
+    let pictureInPicture: PictureInPicture?
     let onToggleDeck: () -> Void
     let onCurtain: () -> Void
     let onSettings: () -> Void
@@ -389,6 +429,16 @@ struct SessionControls: View {
 
         ToolbarButton("Trackpad Deck", systemName: "rectangle.bottomhalf.inset.filled", isActive: deckIsOut) {
             onToggleDeck()
+        }
+
+        if let pictureInPicture {
+            ToolbarButton(
+                "Picture in Picture",
+                systemName: pictureInPicture.isActive ? "pip.exit" : "pip.enter",
+                isActive: pictureInPicture.isActive
+            ) {
+                pictureInPicture.toggle()
+            }
         }
 
         Menu {

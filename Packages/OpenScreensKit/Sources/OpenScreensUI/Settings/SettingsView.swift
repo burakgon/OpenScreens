@@ -224,9 +224,13 @@ struct ShortcutsSettingsPane: View {
     }
 }
 
-private struct ShortcutEditor: View {
+/// Edits one key combination: a shortcut of the user's own, or what a
+/// button sends, which has a name of its own already.
+struct ShortcutEditor: View {
     @Environment(\.dismiss) private var dismiss
     @State var shortcut: RemoteShortcut
+    var asksForName = true
+    var title = "Shortcut"
     let onSave: (RemoteShortcut) -> Void
 
     private enum KeyKind: String, CaseIterable, Identifiable {
@@ -250,14 +254,16 @@ private struct ShortcutEditor: View {
     }
 
     private var isValid: Bool {
-        !shortcut.name.trimmingCharacters(in: .whitespaces).isEmpty && key.keysym != 0
+        (!asksForName || !shortcut.name.trimmingCharacters(in: .whitespaces).isEmpty) && key.keysym != 0
     }
 
     var body: some View {
         NavigationStack {
             Form {
-                Section {
-                    TextField("Name", text: $shortcut.name, prompt: Text("Show Launchpad"))
+                if asksForName {
+                    Section {
+                        TextField("Name", text: $shortcut.name, prompt: Text("Show Launchpad"))
+                    }
                 }
                 Section("Modifiers") {
                     modifierToggle("⌃  Control", .control)
@@ -304,7 +310,7 @@ private struct ShortcutEditor: View {
                 }
             }
             .formStyle(.grouped)
-            .navigationTitle("Shortcut")
+            .navigationTitle(title)
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             #endif
