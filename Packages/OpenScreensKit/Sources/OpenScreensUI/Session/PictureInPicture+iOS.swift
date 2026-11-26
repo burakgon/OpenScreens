@@ -68,9 +68,14 @@ final class PictureInPicture: NSObject {
     /// When the session came on screen, on the clock frames are stamped
     /// with: where the window's time range starts.
     @ObservationIgnored nonisolated(unsafe) private var liveSince = CMTime.invalid
-    /// What the play button shows. It only ever stands for the key it
-    /// sends, so it turns over each time that key is sent.
-    @ObservationIgnored nonisolated(unsafe) private var showsPaused = false
+    /// Whether the window is up, for the system to ask from any thread.
+    ///
+    /// The window shows the picture as paused while it is up. Shown as
+    /// playing, a tap on a skip button reaches the app as a pause instead,
+    /// so the skip buttons only work this way; the play button then sends
+    /// its key on every tap. Before the window is up the picture is shown
+    /// as playing, which is what lets it come up by itself.
+    @ObservationIgnored nonisolated(unsafe) private var windowIsUp = false
     /// Whether either skip button sends a key, for the system to ask from
     /// any thread.
     @ObservationIgnored nonisolated(unsafe) private var skips = false
@@ -118,7 +123,6 @@ final class PictureInPicture: NSObject {
         lastImage = nil
         lastVideoFrames = nil
         liveSince = .invalid
-        showsPaused = false
         layer.sampleBufferRenderer.flush(removingDisplayedImage: true, completionHandler: nil)
     }
 
@@ -286,6 +290,8 @@ extension PictureInPicture: AVPictureInPictureControllerDelegate {
         // Started from the button, or by the system on the way out.
         MainActor.assumeIsolated {
             isActive = true
+            windowIsUp = true
+            self.controller?.invalidatePlaybackState()
             followFrames()
         }
     }
@@ -295,6 +301,8 @@ extension PictureInPicture: AVPictureInPictureControllerDelegate {
     ) {
         MainActor.assumeIsolated {
             isActive = false
+            windowIsUp = false
+            self.controller?.invalidatePlaybackState()
             followFrames()
         }
     }
@@ -305,6 +313,8 @@ extension PictureInPicture: AVPictureInPictureControllerDelegate {
     ) {
         MainActor.assumeIsolated {
             isActive = false
+            windowIsUp = false
+            self.controller?.invalidatePlaybackState()
             followFrames()
         }
     }
@@ -323,10 +333,10 @@ extension PictureInPicture: AVPictureInPictureSampleBufferPlaybackDelegate {
         _ controller: AVPictureInPictureController, setPlaying playing: Bool
     ) {
         MainActor.assumeIsolated {
-            guard let key = keys.playPause else { return }
-            send(key)
-            showsPaused = !playing
-            self.controller?.invalidatePlaybackState()
+            // Shown as paused, a tap on the play button asks to play. A
+            // request to pause is the system's own, not a tap.
+            guard playing else { return }
+            send(keys.playPause)
         }
     }
 
@@ -346,7 +356,7 @@ extension PictureInPicture: AVPictureInPictureSampleBufferPlaybackDelegate {
     nonisolated func pictureInPictureControllerIsPlaybackPaused(
         _ controller: AVPictureInPictureController
     ) -> Bool {
-        showsPaused
+        windowIsUp
     }
 
     nonisolated func pictureInPictureController(

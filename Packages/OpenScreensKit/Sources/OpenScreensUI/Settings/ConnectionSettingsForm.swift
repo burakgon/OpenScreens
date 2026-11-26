@@ -153,7 +153,7 @@ struct ConnectionSettingsForm: View {
     }
 
     private static let modesFooter = "Keep the screen in view while you use other apps. On Demand adds a button to a session's controls. Automatically does it whenever you leave the app during a session: more convenient, but it uses more battery."
-    private static let keysFooter = "The window's skip and play buttons send the keys you choose, such as F13 to F15, to the remote computer."
+    private static let keysFooter = "The window's skip and play buttons can send any shortcut from a session's Shortcuts menu, or a key of your choosing such as F13."
     #endif
 
     private var soundSection: some View {
@@ -270,8 +270,10 @@ struct ConnectionSettingsForm: View {
 }
 
 #if os(iOS)
-/// Chooses the key one of the Picture in Picture window's buttons sends.
+/// Chooses what one of the Picture in Picture window's buttons sends: one
+/// of the shortcuts the session's Shortcuts menu has, or a key of its own.
 private struct PictureInPictureKeyRow: View {
+    @Environment(AppModel.self) private var model
     let title: String
     @Binding var shortcut: RemoteShortcut?
     let kind: ComputerKind
@@ -279,31 +281,56 @@ private struct PictureInPictureKeyRow: View {
 
     var body: some View {
         LabeledContent(title) {
-            if let shortcut {
-                HStack(spacing: 8) {
-                    Button {
-                        editing = shortcut
-                    } label: {
+            Menu {
+                if !model.settings.customShortcuts.isEmpty {
+                    Section("My Shortcuts") {
+                        ForEach(model.settings.customShortcuts) { choice($0) }
+                    }
+                }
+                Section(kind.isApple ? "Mac" : kind.title) {
+                    ForEach(RemoteShortcut.builtIn(for: kind)) { choice($0) }
+                }
+                Section {
+                    Button("Other Key…", systemImage: "keyboard") {
+                        // A key of its own is named after the button.
+                        editing = shortcut?.name == title
+                            ? shortcut
+                            : RemoteShortcut(name: title, key: .function(13))
+                    }
+                    if shortcut != nil {
+                        Button("Send Nothing", systemImage: "xmark") {
+                            shortcut = nil
+                        }
+                    }
+                }
+            } label: {
+                if let shortcut {
+                    HStack(spacing: 6) {
+                        if shortcut.name != title {
+                            Text(shortcut.name)
+                        }
                         KeyCap(shortcut.displayString(for: kind))
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("\(title): \(shortcut.displayString(for: kind))")
-                    Button("Send Nothing", systemImage: "xmark.circle.fill") {
-                        self.shortcut = nil
-                    }
-                    .labelStyle(.iconOnly)
-                    .foregroundStyle(.secondary)
-                    .buttonStyle(.plain)
-                }
-            } else {
-                Button("Choose…") {
-                    editing = RemoteShortcut(name: title, key: .function(13))
+                } else {
+                    Text("Nothing")
                 }
             }
         }
         .sheet(item: $editing) { shortcut in
             ShortcutEditor(shortcut: shortcut, asksForName: false, title: title) { saved in
                 self.shortcut = saved
+            }
+        }
+    }
+
+    private func choice(_ choice: RemoteShortcut) -> some View {
+        Button {
+            shortcut = choice
+        } label: {
+            Label {
+                Text("\(choice.name)   \(choice.displayString(for: kind))")
+            } icon: {
+                Image(systemName: shortcut == choice ? "checkmark" : choice.symbolName)
             }
         }
     }
