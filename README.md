@@ -158,14 +158,14 @@ to the same Macs. What OpenScreens adds:
   signing in, a computer that could not be reached — stays on the phone,
   which is the half in your hand.
 
-<sub>Written against an iPhone Duo and a second screen, and not yet run on
-either. Both read it from the system, and so want a newer iOS than the app
-asks for: the hinge is iOS 27.1, and iOS 27 to ask a display to be the app's
-own rather than a mirror of the phone. Below those the phone is taken to be
-open and a display mirrors it, as it does today. The wait that decides when a
-fold asks for a new desktop is a first guess rather than a measurement, and
-the dissolve covers Standard mode only — High Performance still redraws
-across a resize.</sub>
+<sub>Tried on an iPhone Duo, folded, half-open and stood up like a laptop, and
+with a display on the end of a cable. Both are read from the system, and so
+want a newer iOS than the app asks for: the hinge is iOS 27.1, and iOS 27 to
+ask a display to be the app's own rather than a mirror of the phone. Below
+those the phone is taken to be open and a display mirrors it, as it does
+today. How long the Mac is left to settle before a new desktop is asked for
+has been watched, not measured, and the dissolve covers Standard mode only —
+High Performance still redraws across a resize.</sub>
 
 **Keeping up to date**
 
