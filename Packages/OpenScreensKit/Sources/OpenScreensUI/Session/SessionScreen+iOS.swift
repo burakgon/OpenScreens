@@ -14,7 +14,7 @@ struct SessionScreen: View {
     @State private var showsCurtainPrompt = false
     @State private var showsSettings = false
     @State private var showsCloseConfirmation = false
-    /// Whether the trackpad deck is out. Nil leaves it to how the device is
+    /// Whether the deck of keys is out. Nil leaves it to how the device is
     /// being held.
     @State private var deckChoice: Bool? = SessionScreen.initialDeckChoice
     @State private var hardwareKeyboard = HardwareKeyboardMonitor()
@@ -28,49 +28,43 @@ struct SessionScreen: View {
         return nil
     }
 
-    /// The trackpad deck appears when asked for, and by itself on a foldable
-    /// set down half open like a laptop.
+    /// The deck appears when asked for, then as the way the device is held
+    /// has been set to answer, and if neither says anything then by itself on
+    /// a foldable set down half open like a laptop.
+    ///
+    /// A foldable set down like a laptop gets its keyboard and trackpad the
+    /// moment it is, whatever was said about the key row in another posture
+    /// and without waiting for the connection: the lower half has no picture
+    /// on it, and an empty half would look broken. Only putting it away
+    /// while held that way puts it away.
     private func showsDeck(in size: CGSize) -> Bool {
+        if isLaptopLike(size) { return deckChoice ?? true }
         guard session.isConnected else { return false }
-        return deckChoice ?? (bridge.hingeIsPartiallyOpen && size.width > size.height)
+        if let deckChoice { return deckChoice }
+        if let chosen = session.computer.settings.postures[session.devicePosture].showsDeck {
+            return chosen
+        }
+        return isLaptopLike(size)
     }
 
+    private var display: ExternalDisplay { .shared }
+
     var body: some View {
-        GeometryReader { geometry in
-            let deckVisible = showsDeck(in: geometry.size)
-            let deckHeight = deckVisible ? deckHeight(in: geometry.size) : 0
-
-            ZStack(alignment: .bottom) {
-                SessionView(session: session, onClose: onClose)
-
-                if deckVisible {
-                    TrackpadDeck(session: session)
-                        .frame(height: deckHeight)
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
-                }
+        Group {
+            if display.isConnected {
+                // The desktop is on the display; the phone is what is under
+                // a laptop's screen.
+                ExternalDisplayControls(session: session, onClose: requestClose)
+            } else {
+                onPhone
             }
-            .animation(.smooth(duration: 0.3), value: deckVisible)
-            .onChange(of: deckHeight, initial: true) { _, height in
-                // The picture goes down to the edge of the screen, and
-                // the deck stands on the part the system keeps clear.
-                bridge.deckInset = height > 0 ? height + geometry.safeAreaInsets.bottom : 0
-                bridge.isDeckVisible = height > 0
-                bridge.canvas?.setNeedsLayout()
-                bridge.canvas?.refreshCursorVisibility()
-            }
-            .overlay {
-                if session.isConnected {
-                    SessionControls(
-                        session: session,
-                        deckIsOut: deckVisible,
-                        showsHardwareKeyboardHint: hardwareKeyboard.isAttached,
-                        onToggleDeck: { deckChoice = !deckVisible },
-                        onCurtain: toggleCurtain,
-                        onSettings: { showsSettings = true },
-                        onClose: requestClose)
-                        .ignoresSafeArea()
-                }
-            }
+        }
+        // While a session is open, a connected display is asked for and the
+        // desktop is drawn there.
+        .background {
+            ExternalDisplayAccessory()
+                .frame(width: 0, height: 0)
+                .accessibilityHidden(true)
         }
         .ignoresSafeArea(.keyboard)
         // Always, and never as a function of the layout: whether the bar
@@ -82,9 +76,10 @@ struct SessionScreen: View {
         // Dock, its menu bar. A swipe for the system takes a second try.
         .defersSystemGestures(on: .all)
         .onChange(of: bridge.hingeIsPartiallyOpen) { _, isHalfOpen in
-            // Turning the deck away lasts for as long as the device is held
-            // the way that brought it out.
-            if !isHalfOpen, deckChoice == false {
+            // Set down like a laptop, the keyboard comes out whatever was
+            // chosen before; turning it away lasts for as long as the device
+            // is held that way.
+            if isHalfOpen || deckChoice == false {
                 deckChoice = nil
             }
         }
@@ -106,6 +101,26 @@ struct SessionScreen: View {
         .onDisappear {
             UIApplication.shared.isIdleTimerDisabled = false
         }
+        .onAppear { display.session = session }
+        .onDisappear {
+            if display.session === session {
+                display.session = nil
+            }
+        }
+        .onChange(of: display.isConnected, initial: true) { wasConnected, isConnected in
+            if isConnected {
+                // Nothing of the phone's screen covers the desktop, and how
+                // the phone is folded has no bearing on it.
+                bridge.deckInset = 0
+                bridge.deckIsLaptop = false
+                session.devicePostureChanged(to: .open)
+            } else if wasConnected {
+                // Back on the phone, where the fold counts again.
+                session.devicePostureChanged(to: DevicePosture.resolve(
+                    hingeIsClosed: bridge.hingeIsClosed,
+                    hingeIsLaptopLike: bridge.hingeIsPartiallyOpen))
+            }
+        }
         .onChange(of: hardwareKeyboard.isAttached, initial: true) { _, attached in
             bridge.hasHardwareKeyboard = attached
             if attached {
@@ -114,12 +129,79 @@ struct SessionScreen: View {
         }
     }
 
-    private func deckHeight(in size: CGSize) -> CGFloat {
-        if bridge.hingeIsPartiallyOpen, size.width > size.height {
-            // The fold runs across the middle; the deck takes the lower half.
-            return size.height / 2
+    /// The session on the phone's own screen, with the deck under it when
+    /// there is one.
+    private var onPhone: some View {
+        GeometryReader { geometry in
+            let deckVisible = showsDeck(in: geometry.size)
+            let deckIsLaptop = deckVisible && isLaptopLike(geometry.size)
+            let deckHeight = deckVisible
+                ? deckHeight(in: geometry.size, safeArea: geometry.safeAreaInsets) : 0
+
+            ZStack(alignment: .bottom) {
+                SessionView(session: session, onClose: onClose)
+
+                if deckVisible {
+                    Group {
+                        if deckIsLaptop {
+                            // The whole half under the crease, made into the
+                            // keyboard and trackpad of a laptop.
+                            LaptopDeck(session: session)
+                        } else {
+                            ControlDeck(session: session)
+                        }
+                    }
+                    .frame(height: deckHeight)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+            }
+            .animation(.smooth(duration: 0.3), value: deckVisible)
+            .onChange(of: deckHeight, initial: true) { _, height in
+                // The picture goes down to the edge of the screen, and
+                // the deck stands on the part the system keeps clear.
+                bridge.deckInset = height > 0 ? height + geometry.safeAreaInsets.bottom : 0
+                bridge.deckIsLaptop = deckIsLaptop
+                bridge.canvas?.setNeedsLayout()
+            }
+            .overlay {
+                if session.isConnected {
+                    SessionControls(
+                        session: session,
+                        deckIsOut: deckVisible,
+                        showsHardwareKeyboardHint: hardwareKeyboard.isAttached,
+                        onToggleDeck: { deckChoice = !deckVisible },
+                        onCurtain: toggleCurtain,
+                        onSettings: { showsSettings = true },
+                        onClose: requestClose)
+                        .ignoresSafeArea()
+                }
+            }
         }
-        return min(max(size.height * 0.36, 220), 360)
+    }
+
+    /// Whether the device is stood up half open with the fold running
+    /// across the screen, the way a laptop is.
+    ///
+    /// The hinge says how far it is open but not which way it runs, so the
+    /// shape of the window says it: the Duo's fold crosses its inner screen
+    /// held upright, and a half-open Duo turned on its side is a book, not a
+    /// laptop.
+    private func isLaptopLike(_ size: CGSize) -> Bool {
+        bridge.hingeIsPartiallyOpen && size.height > size.width
+    }
+
+    private func deckHeight(in size: CGSize, safeArea: EdgeInsets) -> CGFloat {
+        if isLaptopLike(size) {
+            // The fold runs across the middle of the screen, which is not
+            // the middle of the part the system keeps clear: the two ends of
+            // the screen keep different amounts back. So the half below it
+            // is measured from the edges of the screen, and given to the
+            // keyboard and trackpad, so that the picture stops above the
+            // crease and the keys start below it.
+            let screenHeight = size.height + safeArea.top + safeArea.bottom
+            return max(screenHeight / 2 - safeArea.bottom, 0)
+        }
+        return ControlDeck.height
     }
 
     private func toggleCurtain() {
@@ -161,11 +243,15 @@ struct SessionSettingsSheet: View {
                         session.apply(draft)
                         dismiss()
                     }
-                    .disabled(draft == session.settings)
+                    .disabled(draft == session.computer.settings)
                 }
             }
         }
-        .onAppear { draft = session.settings }
+        // The computer's own settings, not the ones in force: while the
+        // device is folded, what a session works to has the folded posture's
+        // changes over the top, and applying that would save a fold as an
+        // edit someone made.
+        .onAppear { draft = session.computer.settings }
     }
 }
 
@@ -387,7 +473,7 @@ struct SessionControls: View {
         }
         .sensoryFeedback(.selection, trigger: session.settings.touchInput)
 
-        ToolbarButton("Trackpad Deck", systemName: "rectangle.bottomhalf.inset.filled", isActive: deckIsOut) {
+        ToolbarButton("Key Row", systemName: "keyboard.badge.ellipsis", isActive: deckIsOut) {
             onToggleDeck()
         }
 
@@ -537,6 +623,258 @@ private struct ToolbarButton: View {
         .buttonStyle(.plain)
         .accessibilityLabel(title)
         .accessibilityAddTraits(isActive ? .isSelected : [])
+    }
+}
+
+/// The phone while the desktop is on a display of its own: the whole screen
+/// a trackpad, the phone's own keyboard to type with, and a strip along the
+/// top for what the session controls would otherwise give.
+///
+/// Signing in and anything that goes wrong are shown here, over the
+/// trackpad, because the phone is what is in the hand and the display cannot
+/// be touched.
+private struct ExternalDisplayControls: View {
+    let session: RemoteSession
+    let onClose: () -> Void
+
+    @State private var showsKeyboard = false
+
+    var body: some View {
+        ZStack {
+            Color(white: 0.13)
+                .ignoresSafeArea()
+
+            GeometryReader { geometry in
+                let isUpright = geometry.size.height > geometry.size.width
+                // Held on its side, a phone keeps room clear of its camera
+                // on one side only. The same room on both sides keeps the
+                // trackpad in the middle, and out from under the camera.
+                // Upright, the camera is above, and the trackpad goes from
+                // one edge to the other.
+                let side = isUpright
+                    ? 0 : max(geometry.safeAreaInsets.leading, geometry.safeAreaInsets.trailing)
+                let width = geometry.size.width + geometry.safeAreaInsets.leading
+                    + geometry.safeAreaInsets.trailing - 2 * side - 20
+                VStack(spacing: 10) {
+                    bar
+                    // A trackpad is wider than it is tall, however the phone
+                    // is held. Upright that leaves the bottom of the screen
+                    // over, which is where the keyboard comes up.
+                    trackpad
+                        .frame(height: isUpright ? max(width / 1.5, 0) : nil)
+                    if isUpright {
+                        Spacer(minLength: 0)
+                    }
+                }
+                .padding(.horizontal, 10)
+                .padding(.bottom, 10)
+                .safeAreaPadding(.horizontal, side)
+                .ignoresSafeArea(.container, edges: .horizontal)
+            }
+
+            if !session.isConnected {
+                Color.black.opacity(0.6)
+                    .ignoresSafeArea()
+                SessionStatusOverlay(session: session, onClose: onClose)
+            }
+        }
+        .environment(\.colorScheme, .dark)
+        .animation(.smooth(duration: 0.28), value: session.phase)
+        .onChange(of: session.isConnected) { _, connected in
+            if !connected {
+                showsKeyboard = false
+            }
+        }
+        .task(id: session.id) {
+            // Starting is the canvas's to do on the phone. Here it is on the
+            // display, so the phone does it, a moment later so that the
+            // display's canvas has been laid out and the desktop is made the
+            // display's size from the first.
+            try? await Task.sleep(for: .milliseconds(80))
+            session.start()
+        }
+    }
+
+    /// The screen below the strip, drawn as a trackpad and working as one.
+    private var trackpad: some View {
+        let shape = RoundedRectangle(cornerRadius: 22, style: .continuous)
+        return TypingTrackpad(session: session, showsKeyboard: $showsKeyboard)
+            .background {
+                shape.fill(LinearGradient(
+                    colors: [Color(white: 0.25), Color(white: 0.2)],
+                    startPoint: .top, endPoint: .bottom))
+            }
+            .overlay {
+                shape.strokeBorder(Color.black.opacity(0.35), lineWidth: 1)
+                    .allowsHitTesting(false)
+            }
+            .overlay {
+                if session.isConnected, !showsKeyboard {
+                    VStack(spacing: 6) {
+                        Image(systemName: "hand.draw")
+                            .font(.system(size: 34, weight: .light))
+                        Text("Move with one finger, scroll with two.\nSwipe with three for Mission Control and Spaces.")
+                            .font(.footnote)
+                            .multilineTextAlignment(.center)
+                    }
+                    .foregroundStyle(.tertiary)
+                    .allowsHitTesting(false)
+                }
+            }
+            .clipShape(shape)
+    }
+
+    private var bar: some View {
+        HStack(spacing: 4) {
+            Label("On the External Display", systemImage: "display")
+                .font(.footnote.weight(.medium))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .padding(.leading, 14)
+            Spacer(minLength: 8)
+            if session.isConnected {
+                ToolbarButton(
+                    showsKeyboard ? "Hide Keyboard" : "Keyboard",
+                    systemName: showsKeyboard ? "keyboard.chevron.compact.down" : "keyboard",
+                    isActive: showsKeyboard
+                ) {
+                    showsKeyboard.toggle()
+                }
+                Menu {
+                    ShortcutMenuItems(session: session)
+                } label: {
+                    ToolbarIcon(systemName: "command")
+                }
+                .accessibilityLabel("Shortcuts")
+            }
+            ToolbarButton("Disconnect", systemName: "xmark", tint: .red, action: onClose)
+        }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 2)
+        .glassEffect(.regular, in: .capsule)
+        .padding(.top, 4)
+    }
+}
+
+/// The trackpad, which is also what the phone's keyboard types into.
+private struct TypingTrackpad: UIViewRepresentable {
+    let session: RemoteSession
+    @Binding var showsKeyboard: Bool
+
+    func makeUIView(context: Context) -> TypingTrackpadView {
+        TypingTrackpadView(session: session)
+    }
+
+    func updateUIView(_ view: TypingTrackpadView, context: Context) {
+        view.onKeyboardHidden = { [$showsKeyboard] in
+            $showsKeyboard.wrappedValue = false
+        }
+        if showsKeyboard, !view.isFirstResponder {
+            view.becomeFirstResponder()
+        } else if !showsKeyboard, view.isFirstResponder {
+            view.resignFirstResponder()
+        }
+    }
+}
+
+/// A trackpad that takes the phone's keyboard as well.
+///
+/// The canvas is what is typed into on the phone's own screen. With the
+/// desktop on a display that cannot be touched, the canvas is there and
+/// cannot have the keyboard, so the trackpad has it instead: the letters are
+/// typed on the remote computer, with the row of modifiers, Escape, Tab and
+/// arrows above the keys as on the phone's own screen.
+final class TypingTrackpadView: UIView, UIKeyInput {
+    private let session: RemoteSession
+    /// Told when the keyboard goes away by itself, to keep the button that
+    /// brings it out in step.
+    var onKeyboardHidden: (() -> Void)?
+    private lazy var accessory: UIView = makeAccessory()
+
+    init(session: RemoteSession) {
+        self.session = session
+        super.init(frame: .zero)
+        backgroundColor = .clear
+        let pad = LaptopTrackpadView(session: session)
+        pad.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(pad)
+        NSLayoutConstraint.activate([
+            pad.leadingAnchor.constraint(equalTo: leadingAnchor),
+            pad.trailingAnchor.constraint(equalTo: trailingAnchor),
+            pad.topAnchor.constraint(equalTo: topAnchor),
+            pad.bottomAnchor.constraint(equalTo: bottomAnchor),
+        ])
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override var canBecomeFirstResponder: Bool { true }
+
+    override var inputAccessoryView: UIView? { accessory }
+
+    @discardableResult
+    override func resignFirstResponder() -> Bool {
+        let resigned = super.resignFirstResponder()
+        if resigned {
+            // After the update that asked for it, never during it.
+            Task { @MainActor [weak self] in
+                self?.onKeyboardHidden?()
+            }
+        }
+        return resigned
+    }
+
+    // MARK: Typing
+
+    var hasText: Bool { true }
+
+    func insertText(_ text: String) {
+        guard session.canSendInput else { return }
+        // Modifiers latched from the row above the keys wrap the next
+        // character, which is what turns "c" into ⌘C.
+        session.type(text)
+    }
+
+    func deleteBackward() {
+        guard session.canSendInput else { return }
+        session.tap(.special(.delete))
+    }
+
+    // The remote computer has its own ideas about correction and
+    // capitalisation; the phone's keyboard should not second-guess them.
+    var autocorrectionType: UITextAutocorrectionType = .no
+    var autocapitalizationType: UITextAutocapitalizationType = .none
+    var spellCheckingType: UITextSpellCheckingType = .no
+    var smartQuotesType: UITextSmartQuotesType = .no
+    var smartDashesType: UITextSmartDashesType = .no
+    var smartInsertDeleteType: UITextSmartInsertDeleteType = .no
+    var keyboardAppearance: UIKeyboardAppearance = .dark
+
+    private func makeAccessory() -> UIView {
+        let bar = KeyboardAccessoryBar(
+            session: session, bridge: session.canvasBridge,
+            onHide: { [weak self] in self?.resignFirstResponder() })
+        let host = UIHostingController(rootView: bar)
+        host.view.backgroundColor = .clear
+        host.sizingOptions = .intrinsicContentSize
+        let container = UIInputView(
+            frame: CGRect(x: 0, y: 0, width: 320, height: KeyboardAccessoryBar.height),
+            inputViewStyle: .keyboard)
+        container.allowsSelfSizing = true
+        container.backgroundColor = .clear
+        host.view.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(host.view)
+        NSLayoutConstraint.activate([
+            host.view.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            host.view.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            host.view.topAnchor.constraint(equalTo: container.topAnchor),
+            host.view.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+            host.view.heightAnchor.constraint(equalToConstant: KeyboardAccessoryBar.height),
+        ])
+        return container
     }
 }
 #endif

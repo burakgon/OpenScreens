@@ -55,7 +55,7 @@ public struct Viewport: Equatable, Sendable {
     }
 
     /// How much of the bottom of the usable area something has come to
-    /// cover for a while: an on-screen keyboard, a trackpad deck.
+    /// cover for a while: an on-screen keyboard, a docked row of keys.
     ///
     /// The picture is not made smaller for it. A desktop shrunk to what is
     /// left above a keyboard is too small to read what is being typed. It

@@ -384,11 +384,14 @@ extension RemoteCanvasView: UIGestureRecognizerDelegate {
         }
     }
 
+    /// Clicks where the pointer already is, for the laptop deck's trackpad.
     func clickAtPointer(_ button: PointerButtons) {
         guard session.canSendInput else { return }
         session.click(button, at: pointerLocation)
     }
 
+    /// Holds or lets go of the button where the pointer is, so the laptop
+    /// deck's trackpad can drag.
     func setDragAtPointer(_ isDown: Bool) {
         guard session.canSendInput else { return }
         if isDown {
@@ -481,12 +484,40 @@ extension RemoteCanvasView: UIGestureRecognizerDelegate {
     }
 
     @objc private func handleThreeFingerPan(_ recognizer: UIPanGestureRecognizer) {
-        // Three fingers slide the zoomed picture around without touching the
-        // remote computer.
+        // Three fingers are the one gesture nothing else asks for: a finger
+        // taps and clicks, two fingers scroll and zoom. So they either slide
+        // the zoomed picture about, or do the same thing on the Mac that they
+        // do on a Mac's own trackpad.
+        if sendsMacGesturesForThreeFingerSwipes {
+            sendMacGestureSwipe(recognizer)
+            return
+        }
         guard recognizer.state == .changed else { return }
         let translation = recognizer.translation(in: self)
         recognizer.setTranslation(.zero, in: self)
         session.viewport.pan(by: CGSize(width: translation.x, height: translation.y))
+    }
+
+    /// Whether three fingers belong to the Mac rather than to the picture.
+    private var sendsMacGesturesForThreeFingerSwipes: Bool {
+        session.settings.threeFingerSwipes == .macGestures && session.computer.kind.isApple
+    }
+
+    /// Sends the system gesture a completed three-finger swipe stands for.
+    ///
+    /// Nothing is sent while the swipe is still on its way: the same three
+    /// fingers that meant Mission Control can end halfway to it, and a Mac
+    /// answers every swipe it is given. Until the hand has finished, the
+    /// picture stays where it is.
+    private func sendMacGestureSwipe(_ recognizer: UIPanGestureRecognizer) {
+        guard recognizer.state == .ended else { return }
+        let translation = recognizer.translation(in: self)
+        recognizer.setTranslation(.zero, in: self)
+        guard let swipe = SwipeDirection.resolve(translation: translation),
+              let shortcut = session.settings.threeFingerSwipes.shortcut(
+                for: swipe, on: session.computer.kind) else { return }
+        haptic(.medium)
+        session.send(shortcut)
     }
 
     // MARK: Scrolling
@@ -512,7 +543,12 @@ extension RemoteCanvasView: UIGestureRecognizerDelegate {
         session.gesture(.ended, at: touchState.scrollPoint)
     }
 
-    func scrollAtPointer(by delta: CGSize, phase: AppleScrollEvent.Phase) {
+    /// Scrolls at the pointer, for two fingers on the laptop deck's trackpad.
+    /// A scroll that ends with the fingers still moving coasts to a stop, as
+    /// it does on a Mac's own trackpad.
+    func scrollAtPointer(
+        by delta: CGSize, phase: AppleScrollEvent.Phase, releaseVelocity: CGSize = .zero
+    ) {
         switch phase {
         case .began:
             stopMomentum()
@@ -521,8 +557,11 @@ extension RemoteCanvasView: UIGestureRecognizerDelegate {
             session.pointer(buttons: buttons, at: pointerLocation)
             session.gesture(.began, at: pointerLocation)
             session.scroll(by: delta, at: pointerLocation, phase: .began)
-        case .ended, .cancelled:
-            endScroll(cancelled: phase == .cancelled)
+        case .ended:
+            endScroll(cancelled: false)
+            startMomentum(velocity: releaseVelocity)
+        case .cancelled:
+            endScroll(cancelled: true)
         default:
             session.scroll(by: delta, at: touchState.scrollPoint, phase: .changed)
         }

@@ -2,6 +2,7 @@ import CoreGraphics
 import Foundation
 import Observation
 import OpenScreensCore
+import QuartzCore
 import RFBProtocol
 import RFBTransport
 import rootshellVNC
@@ -157,6 +158,13 @@ public final class RemoteSession: Identifiable {
     /// The size a VNC server's desktop had when this session first reached
     /// it, to put it back to when the user stops fitting it to the view.
     @ObservationIgnored private var desktopSizeAtConnect: CGSize?
+    /// Waits out a fold before asking the remote computer for another
+    /// desktop. See ``settleDisplaySizeRequest()``.
+    @ObservationIgnored private var displaySizeSettler = ResizeSettler<CGSize>()
+    @ObservationIgnored private var displaySizeRequest: Task<Void, Never>?
+    /// Whether the remote computer has been told what size to make yet, which
+    /// is what makes the first size reported asked for at once.
+    @ObservationIgnored private var hasAskedForDisplaySize = false
 
     private struct DesktopRequest: Equatable {
         var room: CGSize
@@ -218,7 +226,9 @@ public final class RemoteSession: Identifiable {
 
     // MARK: - State
 
-    public var settings: ConnectionSettings { computer.settings }
+    /// The settings in force, which are the computer's own with whatever the
+    /// way the device is being held has to say laid over them.
+    public var settings: ConnectionSettings { computer.settings.overlaid(for: devicePosture) }
 
     public var phase: Phase {
         if let hostKeyPrompt { return .awaitingHostKey(hostKeyPrompt) }
@@ -322,6 +332,34 @@ public final class RemoteSession: Identifiable {
 
     /// Whether gestures should be acknowledged with haptic taps.
     public var hapticsEnabled: Bool { appSettings.hapticFeedback }
+
+    // MARK: - How the device is held
+
+    /// How the device running this session is being held. The canvas sets it,
+    /// because the canvas is where the hinge is read; on a device with no
+    /// hinge to read it stays ``DevicePosture/open``.
+    public private(set) var devicePosture: DevicePosture = .open
+
+    /// The canvas has found the device held a different way.
+    ///
+    /// This is not an edit to the computer's settings, and nothing here saves
+    /// it as one: the baseline stays what it was, and the posture's changes
+    /// are read through ``settings`` for as long as it lasts.
+    public func devicePostureChanged(to posture: DevicePosture) {
+        guard posture != devicePosture else { return }
+        let askedFor = minimumDesktopSize
+        devicePosture = posture
+        // Only a posture that wants a desktop of another size has anything to
+        // ask the remote computer for again. Touch mode and the deck are
+        // answered here and now.
+        guard minimumDesktopSize != askedFor else { return }
+        // The fold that brought this about is still passing the window
+        // through the sizes between the two, so the new desktop is asked for
+        // the way anything else that follows a fold is: once the view has
+        // come to rest.
+        displaySizeSettler.stopWaiting()
+        settleDisplaySizeRequest()
+    }
 
     // MARK: - Connecting
 
@@ -829,6 +867,12 @@ public final class RemoteSession: Identifiable {
         if desktopSizeAtConnect == nil, remoteSize.width > 0 {
             desktopSizeAtConnect = remoteSize
         }
+        // A computer someone has got into is one they will want again: it
+        // goes into the library the first time, so that it is waiting there
+        // the next time the app opens, rather than only if they remembered
+        // to save it. Before anything below, which keeps the user name and
+        // the passwords that were typed in only for a computer that is saved.
+        saveToLibrary()
         if let pending = pendingCredentials {
             pendingCredentials = nil
             if pending.username != computer.username {
@@ -939,28 +983,69 @@ public final class RemoteSession: Identifiable {
     /// follows the window can be resized to fit.
     public func viewDidResize(to size: CGSize, displayScale: CGFloat) {
         guard size.width > 1, size.height > 1 else { return }
+        let changed = size != lastViewSize || displayScale != lastDisplayScale
         lastViewSize = size
         lastDisplayScale = displayScale
-        requestDisplaySize()
+        guard changed else { return }
+        // The canvas reports its size at every layout, and the first of them
+        // is the size the desktop is made to fit: nothing is gained by
+        // holding that back. What comes after is where a fold costs money.
+        guard hasAskedForDisplaySize else {
+            requestDisplaySize()
+            return
+        }
+        settleDisplaySizeRequest()
+    }
+
+    /// Asks for the current size once it has stopped changing.
+    ///
+    /// While the wait is on, the picture is still refitted locally at every
+    /// layout, so what is on the screen is the last desktop the Mac made,
+    /// scaled to the window as it is now — not a black frame.
+    private func settleDisplaySizeRequest() {
+        guard let delay = displaySizeSettler.delay(for: lastViewSize, at: CACurrentMediaTime())
+        else { return }
+        displaySizeRequest?.cancel()
+        displaySizeRequest = Task { [weak self] in
+            if delay > 0 {
+                try? await Task.sleep(for: .seconds(delay))
+            }
+            guard let self, !Task.isCancelled else { return }
+            self.displaySizeSettler.stopWaiting()
+            self.sendDisplaySizeRequest()
+        }
     }
 
     /// The size every Mac makes a desktop of, however small the view.
     private static let roomyDesktopSize = ConnectionSettings(moreSpace: true).minimumDesktopSize
 
-    /// The smallest desktop to ask a Mac for: what its settings say, unless
-    /// it has turned a desktop of that size down before.
-    private static func minimumDesktopSize(for computer: Computer) -> CGSize {
-        refusesSmallDesktops.contains(computer.id) ? roomyDesktopSize : computer.settings.minimumDesktopSize
+    /// The smallest desktop to ask a Mac for: what the settings in force say,
+    /// unless the computer has turned a desktop of that size down before.
+    private var minimumDesktopSize: CGSize {
+        Self.refusesSmallDesktops.contains(computer.id)
+            ? Self.roomyDesktopSize
+            : settings.minimumDesktopSize
+    }
+
+    /// Asks now, and calls off a wait on the size coming to rest. Someone who
+    /// changed the settings, or a connection being made, is not a fold going
+    /// past.
+    private func requestDisplaySize() {
+        displaySizeRequest?.cancel()
+        displaySizeRequest = nil
+        displaySizeSettler.stopWaiting()
+        sendDisplaySizeRequest()
     }
 
     /// Asks for displays that fit the view, once its size is known.
-    private func requestDisplaySize() {
+    private func sendDisplaySizeRequest() {
         guard lastViewSize.width > 1, lastViewSize.height > 1 else { return }
+        hasAskedForDisplaySize = true
         let axis = settings.displays.axis(in: lastViewSize)
         if displayAxis != axis {
             displayAxis = axis
         }
-        let minimum = Self.minimumDesktopSize(for: computer)
+        let minimum = minimumDesktopSize
         if engine.configuration.matchClientMinimumPointSize != minimum {
             engine.configuration.matchClientMinimumPointSize = minimum
         }
@@ -1526,7 +1611,7 @@ public final class RemoteSession: Identifiable {
             reconnectionPolicy: VNCReconnectionPolicy(isEnabled: settings.reconnectAutomatically))
         // What the remote Mac lists the displays it creates as.
         configuration.virtualDisplayName = "OpenScreens Display"
-        configuration.matchClientMinimumPointSize = minimumDesktopSize(for: computer)
+        configuration.matchClientMinimumPointSize = computer.settings.minimumDesktopSize
         return configuration
     }
 

@@ -52,6 +52,17 @@ public struct SessionView: View {
             }
 
             SessionStatusOverlay(session: session, onClose: onClose)
+                #if os(iOS)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                // Set down like a laptop, the half under the fold is the
+                // keyboard's: the card goes in the middle of the half above
+                // it, where the desktop will be, and not across the crease
+                // where the keys and the on-screen keyboard cover it. The
+                // deck is measured from the bottom of the screen, so this is
+                // too.
+                .padding(.bottom, session.canvasBridge.deckIsLaptop ? session.canvasBridge.deckInset : 0)
+                .ignoresSafeArea(.container, edges: session.canvasBridge.deckIsLaptop ? .bottom : [])
+                #endif
         }
         .animation(.smooth(duration: 0.28), value: session.phase)
         .task(id: session.id) {

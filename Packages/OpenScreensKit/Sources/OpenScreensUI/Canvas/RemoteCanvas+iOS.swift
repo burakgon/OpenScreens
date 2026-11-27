@@ -37,8 +37,15 @@ public final class RemoteCanvasView: UIView {
     /// from under a keyboard, would otherwise run on under the status bar.
     private let pictureLayer = CALayer()
     private let imageLayer = CALayer()
+    /// The picture that was on the screen before the remote computer sent one
+    /// of another shape, dissolved out of the way rather than swapped for a
+    /// black frame. See ``dissolvePreviousPicture()``.
+    private let fadeLayer = CALayer()
     /// The pointer, drawn locally so it moves without waiting for the network.
     private let cursorLayer = CALayer()
+    /// The size of the last picture drawn, so that a dissolve is only started
+    /// when the desktop really did change shape.
+    private var lastDrawnSize = CGSize.zero
     private var isTracking = false
 
     // MARK: Pointer state (shared with the touch extension)
@@ -94,6 +101,17 @@ public final class RemoteCanvasView: UIView {
         pictureLayer.addSublayer(session.engine.videoBandRenderer.containerLayer)
         pictureLayer.addSublayer(session.engine.secondaryVideoBandRenderer.containerLayer)
 
+        fadeLayer.contentsGravity = .resize
+        fadeLayer.minificationFilter = .trilinear
+        fadeLayer.magnificationFilter = .linear
+        // Everything about this layer is set outright; the one animation it
+        // ever has is the dissolve, which is added by hand.
+        fadeLayer.actions = [
+            "contents": NSNull(), "bounds": NSNull(), "position": NSNull(),
+            "opacity": NSNull(), "hidden": NSNull(),
+        ]
+        fadeLayer.zPosition = 5
+        pictureLayer.addSublayer(fadeLayer)
         cursorLayer.actions = [
             "contents": NSNull(), "bounds": NSNull(), "position": NSNull(), "hidden": NSNull(),
         ]
@@ -195,9 +213,20 @@ public final class RemoteCanvasView: UIView {
         // What was given out, which while two layouts are undoing each
         // other is not the one just worked out.
         let layout = session.canvasBridge.chromeLayout ?? chromeLayout()
-        let insets = layout.pictureInsets
+        var insets = layout.pictureInsets
+        if session.canvasBridge.deckIsLaptop {
+            // Set down like a laptop, the half under the fold is the
+            // keyboard's and never the picture's: the desktop is made for
+            // the half above it and all of it is shown there.
+            insets.bottom = max(insets.bottom, session.canvasBridge.deckInset)
+            // And it goes all the way up. With only half the screen left, a
+            // strip kept clear of the sensor housing is too much to give
+            // away, and the housing over the middle of the menu bar is where
+            // a MacBook has its notch.
+            insets.top = 0
+        }
         // The desktop is sized for the screen with nothing covering it. A
-        // keyboard or trackpad deck neither resizes the remote desktop,
+        // keyboard or docked row of keys neither resizes the remote desktop,
         // which would be slow and would rearrange the user's windows, nor
         // shrinks the picture, which would make it too small to read: the
         // picture slides up as far as it takes to show where the pointer is.
@@ -296,8 +325,14 @@ public final class RemoteCanvasView: UIView {
         pictureLayer.bounds = area
         pictureLayer.position = CGPoint(x: area.midX, y: area.midY)
         imageLayer.isHidden = isVideo
+        fadeLayer.isHidden = isVideo
         imageLayer.contentsScale = scale
         imageLayer.frame = content
+        // The picture being faded out stands where the new one is, so that a
+        // change of shape reads as the desktop settling rather than jumping.
+        if fadeLayer.contents != nil {
+            fadeLayer.frame = content
+        }
 
         let primary = engine.videoBandRenderer
         let secondary = engine.secondaryVideoBandRenderer
@@ -341,7 +376,51 @@ public final class RemoteCanvasView: UIView {
                 presented = cropped
             }
         }
+        // The whole framebuffer, not the part of it being shown: two displays
+        // rearranged inside one desktop is not the desktop changing shape.
+        let made = CGSize(width: image.width, height: image.height)
+        let changedShape = lastDrawnSize != .zero && lastDrawnSize != made
+        lastDrawnSize = made
+        // The picture that is about to be replaced goes up on top of the new
+        // one, stretched to where the new one is, and is faded out from
+        // there. Where it had been drawn at its own size, the change of shape
+        // would have shown as a jump; where it is stretched, it reads as the
+        // desktop settling into the screen it now has.
+        if changedShape, let previous = imageLayer.contents {
+            fadeLayer.contents = previous
+            fadeLayer.frame = session.viewport.contentRect
+            fadeLayer.isHidden = engine.isHighPerformanceMode
+        }
         imageLayer.contents = presented
+        if changedShape {
+            dissolvePreviousPicture()
+        }
+    }
+
+    /// Fades the previous picture out over the new one.
+    ///
+    /// A Mac that has been asked for a desktop of another size takes a moment
+    /// to make one, and the moment ends with a frame of nothing where the
+    /// picture was. Twenty-five hundredths of a second of the old picture is
+    /// not much to spend on it, and it is enough that the change reads as the
+    /// desktop resizing rather than as the connection blinking.
+    ///
+    /// High Performance mode draws from the engine's own video layers, which
+    /// this layer cannot stand in for; the dissolve covers the framebuffer of
+    /// Standard and Full Quality connections.
+    private func dissolvePreviousPicture() {
+        guard fadeLayer.contents != nil, !fadeLayer.isHidden else { return }
+        let fade = CABasicAnimation(keyPath: "opacity")
+        fade.fromValue = 1
+        fade.toValue = 0
+        fade.duration = 0.25
+        CATransaction.begin()
+        CATransaction.setCompletionBlock { [weak self] in
+            self?.fadeLayer.contents = nil
+        }
+        fadeLayer.add(fade, forKey: "dissolve")
+        fadeLayer.opacity = 0
+        CATransaction.commit()
     }
 
     // MARK: - Pointer drawing
@@ -354,18 +433,22 @@ public final class RemoteCanvasView: UIView {
         guard session.isConnected, !session.settings.observeOnly,
               session.engine.activeCursorRendering == .client,
               session.engine.remoteCursorPresence != .hidden else { return false }
+        // On a display of its own nothing touches the picture, and the
+        // pointer is the only way to see where the trackpad has put it.
+        if isOnExternalDisplay { return true }
         // In touch mode the finger is the pointer; drawing one as well only
         // helps when something is hovering or a relative mode is in use.
-        return session.settings.touchInput == .trackpad
-            || isHoveringWithPointer
-            || session.canvasBridge.isDeckVisible
+        return session.settings.touchInput == .trackpad || isHoveringWithPointer
+    }
+
+    private var isOnExternalDisplay: Bool {
+        window?.windowScene?.session.role == .windowExternalDisplayNonInteractive
     }
 
     private func applyCursor() {
         let engine = session.engine
         _ = session.viewport.scale
         _ = session.settings.touchInput
-        _ = session.canvasBridge.isDeckVisible
         guard drawsCursor else {
             cursorLayer.isHidden = true
             return
@@ -477,22 +560,31 @@ public final class RemoteCanvasView: UIView {
 
     // MARK: - Foldables
 
-    /// On a foldable held half open, the lower half of the screen becomes a
-    /// trackpad deck and the picture moves to the upper half.
+    /// How a foldable is held decides what the lower part of the screen is
+    /// for, and moves the picture out of the way of it.
     private func installHingeObserver() {
         guard #available(iOS 27.1, *) else { return }
         let interaction = UIHingeInteraction { [weak self] _, update in
-            guard let self else { return }
+            // How the phone is folded says nothing about a desktop drawn on
+            // a display of its own.
+            guard let self, !self.isOnExternalDisplay else { return }
             let bridge = self.session.canvasBridge
-            let isHalfOpen = update.hinge.map {
+            let hinge = update.hinge
+            let isClosed = hinge?.status == .closed
+            let isHalfOpen = hinge.map {
                 HingePosture.isLaptopLike(
                     isPartiallyOpen: $0.status == .partiallyOpen, angle: $0.angle,
                     wasLaptopLike: bridge.hingeIsPartiallyOpen)
             } ?? false
             // A hinge reports every small movement of a device held in the
             // hand. Only a change of posture is anything to act on.
-            guard bridge.hingeIsPartiallyOpen != isHalfOpen else { return }
+            guard bridge.hingeIsPartiallyOpen != isHalfOpen
+                || bridge.hingeIsClosed != isClosed else { return }
             bridge.hingeIsPartiallyOpen = isHalfOpen
+            bridge.hingeIsClosed = isClosed
+            self.session.devicePostureChanged(
+                to: DevicePosture.resolve(
+                    hingeIsClosed: isClosed, hingeIsLaptopLike: isHalfOpen))
             self.setNeedsLayout()
         }
         addInteraction(interaction)
@@ -508,10 +600,15 @@ public final class RemoteCanvasView: UIView {
 public final class CanvasBridge {
     /// Height at the bottom of the canvas covered by the on-screen keyboard.
     public internal(set) var keyboardInset: CGFloat = 0
-    /// Height at the bottom of the canvas covered by the trackpad deck.
+    /// Height at the bottom of the canvas covered by the deck of keys.
     public var deckInset: CGFloat = 0
     /// Height at the bottom of the canvas that the picture should stay above.
     public var bottomObstruction: CGFloat { max(keyboardInset, deckInset) }
+    /// Whether the deck has the lower half of the screen to itself, as the
+    /// keyboard and trackpad of a laptop. The desktop is then made for the
+    /// half above it, the way a laptop's screen is all above its keyboard,
+    /// rather than for the whole screen with the deck over the bottom of it.
+    public var deckIsLaptop = false
     /// Whether the on-screen keyboard is up.
     public internal(set) var isKeyboardVisible = false
     /// Whether a hardware keyboard is attached.
@@ -519,14 +616,15 @@ public final class CanvasBridge {
     /// Whether a foldable device is being held half open like a laptop,
     /// with one half of the screen flat and the other standing.
     public internal(set) var hingeIsPartiallyOpen = false
+    /// Whether a foldable device is shut, with the session on the screen
+    /// outside.
+    public internal(set) var hingeIsClosed = false
     /// Where the picture and the controls go on the screen the canvas is
     /// on. Nil until the canvas has been laid out.
     public internal(set) var chromeLayout: SessionChromeLayout?
     /// Counts touches on the remote screen, so that controls that are out
     /// only while they are wanted know when to go.
     public internal(set) var canvasTouches = 0
-    /// Whether the trackpad deck is showing under the picture.
-    public var isDeckVisible = false
 
     @ObservationIgnored weak var canvas: RemoteCanvasView?
 
@@ -548,15 +646,16 @@ public final class CanvasBridge {
         canvas?.setSoftwareKeyboardVisible(!isKeyboardVisible)
     }
 
-    /// Moves the pointer by a finger movement made on the trackpad deck.
-    public func deckMoved(by delta: CGSize, interval: TimeInterval) {
-        canvas?.movePointerRelatively(by: delta, interval: interval)
-    }
-
     /// Says that the remote screen is being worked on from somewhere other
-    /// than the canvas: the trackpad deck moves its pointer too.
+    /// than the canvas: the laptop deck's trackpad moves the pointer too.
     public func noteWorkOnRemoteScreen() {
         canvasTouches &+= 1
+    }
+
+    /// Moves the pointer by a finger movement made on the laptop deck's
+    /// trackpad.
+    public func deckMoved(by delta: CGSize, interval: TimeInterval) {
+        canvas?.movePointerRelatively(by: delta, interval: interval)
     }
 
     public func deckClicked(_ button: PointerButtons = .left) {
@@ -564,8 +663,10 @@ public final class CanvasBridge {
         canvas?.clickAtPointer(button)
     }
 
-    public func deckScrolled(by delta: CGSize, phase: AppleScrollEvent.Phase) {
-        canvas?.scrollAtPointer(by: delta, phase: phase)
+    public func deckScrolled(
+        by delta: CGSize, phase: AppleScrollEvent.Phase, releaseVelocity: CGSize = .zero
+    ) {
+        canvas?.scrollAtPointer(by: delta, phase: phase, releaseVelocity: releaseVelocity)
     }
 
     public func deckDrag(began: Bool) {
