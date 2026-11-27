@@ -130,6 +130,43 @@ to the same Macs. What OpenScreens adds:
 - Live statistics: mode, size, frame rate, bitrate, loss, and how the
   connection is protected.
 
+**A folding iPhone, and a screen plugged into one**
+
+- **The desktop follows how the phone is held.** Folded, half-open and open
+  are three different screens, and a fold passes the window through a run of
+  sizes on the way between them. The request for a desktop to match waits
+  until the size has stopped changing, so one fold asks the Mac once instead
+  of at every step through it, and the new picture dissolves in rather than
+  flashing black.
+- **Half-open, the phone is a laptop.** The row of modifiers, Esc, Tab and
+  the arrows takes the half below the crease, and the desktop stops above it
+  the way a screen stops above a keyboard. It can be brought out in any
+  posture from the toolbar.
+- **Each posture can keep its own answers** — how touches drive the pointer,
+  whether the desktop is sized for the screen or for any Mac window, and
+  whether the row of keys is out — under **Folding** in a computer's
+  settings. They are laid over the computer's own settings instead of
+  changing them, so unfolding cannot leave the folded choices saved behind.
+  Nothing is decided for you until you set it, or press the one button that
+  fills in what is suggested.
+- **Three-finger swipes can drive the Mac** instead of moving the picture:
+  up for Mission Control, down for App Exposé, sideways for the next or
+  previous Space. Off until it is turned on.
+- **A display on the phone's cable takes the desktop**, at that display's
+  size, and the phone becomes what sits under a laptop's screen: a trackpad,
+  the keys, and the on-screen keyboard. What has to be read or answered —
+  signing in, a computer that could not be reached — stays on the phone,
+  which is the half in your hand.
+
+<sub>Written against an iPhone Duo and a second screen, and not yet run on
+either. Both read it from the system, and so want a newer iOS than the app
+asks for: the hinge is iOS 27.1, and iOS 27 to ask a display to be the app's
+own rather than a mirror of the phone. Below those the phone is taken to be
+open and a display mirrors it, as it does today. The wait that decides when a
+fold asks for a new desktop is a first guess rather than a measurement, and
+the dissolve covers Standard mode only — High Performance still redraws
+across a resize.</sub>
+
 **Keeping up to date**
 
 - **The Mac app updates itself.** A new version is announced above the
