@@ -1,6 +1,5 @@
 #if os(iOS)
 import OpenScreensCore
-import OSLog
 import SwiftUI
 import UIKit
 
@@ -24,37 +23,6 @@ public final class ExternalDisplay {
 
     private init() {}
 
-    private static let log = Logger(subsystem: "OpenScreens", category: "ExternalDisplay")
-
-    /// Writes down what the system says about screens and scenes, to find out
-    /// where a display that is only mirrored is being lost.
-    public static func trace(_ event: String) {
-        let screens = UIScreen.screens.map { "\(Int($0.bounds.width))×\(Int($0.bounds.height))" }
-        let scenes = UIApplication.shared.connectedScenes.map { "\($0.session.role.rawValue)" }
-        let line = "\(event) — screens: \(screens), scenes: \(scenes)"
-        log.notice("\(line, privacy: .public)")
-        print("[ExternalDisplay] \(line)")
-    }
-
-    /// Starts writing down screens as they come and go.
-    public static func startTracing() {
-        trace("launched")
-        let center = NotificationCenter.default
-        for name in [UIScreen.didConnectNotification, UIScreen.didDisconnectNotification] {
-            center.addObserver(forName: name, object: nil, queue: .main) { _ in
-                MainActor.assumeIsolated {
-                    trace(name == UIScreen.didConnectNotification ? "screen connected" : "screen disconnected")
-                }
-            }
-        }
-        center.addObserver(forName: UIScene.willConnectNotification, object: nil, queue: .main) { note in
-            let role = (note.object as? UIScene)?.session.role.rawValue ?? "?"
-            MainActor.assumeIsolated {
-                trace("scene connecting: \(role)")
-            }
-        }
-    }
-
     /// The scene configuration for a scene the system is connecting, or nil
     /// for any that is not an external display.
     ///
@@ -62,7 +30,6 @@ public final class ExternalDisplay {
     /// `application(_:configurationForConnecting:options:)`, which is how a
     /// SwiftUI app is told about a screen it was not asked to open.
     public static func configuration(for session: UISceneSession) -> UISceneConfiguration? {
-        trace("configuration asked for: \(session.role.rawValue)")
         guard session.role == .windowExternalDisplayNonInteractive else { return nil }
         let configuration = UISceneConfiguration(name: "External Display", sessionRole: session.role)
         configuration.delegateClass = ExternalDisplaySceneDelegate.self
@@ -121,7 +88,6 @@ final class ExternalDisplayAccessoryController: UIViewController {
         let registration = registerSceneAccessory(.externalNonInteractive(sceneConfiguration: configuration))
         registration.isEnabled = true
         self.registration = registration
-        ExternalDisplay.trace("display asked for, available: \(registration.isAvailable)")
     }
 
     private func unregister() {
@@ -129,7 +95,6 @@ final class ExternalDisplayAccessoryController: UIViewController {
               let registration = registration as? UISceneAccessoryRegistration else { return }
         unregisterSceneAccessory(registration)
         self.registration = nil
-        ExternalDisplay.trace("display given back")
     }
 }
 
@@ -147,7 +112,6 @@ public final class ExternalDisplaySceneDelegate: UIResponder, UIWindowSceneDeleg
         willConnectTo session: UISceneSession,
         options connectionOptions: UIScene.ConnectionOptions
     ) {
-        ExternalDisplay.trace("display scene delegate connecting")
         guard let windowScene = scene as? UIWindowScene else { return }
         let window = UIWindow(windowScene: windowScene)
         let host = UIHostingController(rootView: ExternalDisplayRoot())
