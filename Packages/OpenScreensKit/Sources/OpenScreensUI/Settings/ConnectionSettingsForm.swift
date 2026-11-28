@@ -10,6 +10,10 @@ struct ConnectionSettingsForm: View {
     @Binding var settings: ConnectionSettings
     /// The kind of computer being configured, which decides what is offered.
     var kind: ComputerKind = .mac
+    #if os(iOS)
+    /// The posture the folding section is editing the settings of.
+    @State private var editedPosture: DevicePosture = .folded
+    #endif
 
     private var isHighPerformance: Bool {
         settings.quality == .highPerformance
@@ -21,6 +25,9 @@ struct ConnectionSettingsForm: View {
             soundSection
         }
         controlSection
+        #if os(iOS)
+        foldingSection
+        #endif
         keyboardSection
         privacySection
         reliabilitySection
@@ -147,6 +154,11 @@ struct ConnectionSettingsForm: View {
                     Text(mode.title).tag(mode)
                 }
             }
+            Picker("Three-Finger Swipes", selection: $settings.threeFingerSwipes) {
+                ForEach(ThreeFingerSwipeAction.allCases) { action in
+                    Text(action.title).tag(action)
+                }
+            }
             LabeledContent("Pointer Speed") {
                 Slider(value: $settings.pointerSpeed, in: 0.5...2.5, step: 0.1)
             }
@@ -161,6 +173,78 @@ struct ConnectionSettingsForm: View {
             Text("Control")
         }
     }
+
+    #if os(iOS)
+    /// What to change for each way a folding phone is held.
+    ///
+    /// Every choice here has a "leave as set" answer, because a posture that
+    /// said something about everything would undo whatever the person above
+    /// had chosen the moment the device changed hands.
+    private var foldingSection: some View {
+        Section {
+            Picker("When The Phone Is", selection: $editedPosture) {
+                ForEach(DevicePosture.allCases) { posture in
+                    Text(posture.title).tag(posture)
+                }
+            }
+            .pickerStyle(.segmented)
+
+            Picker("Touch Controls", selection: postureTouchInput) {
+                Text("Leave As Set").tag(TouchInputMode?.none)
+                ForEach(TouchInputMode.allCases) { mode in
+                    Text(mode.title).tag(TouchInputMode?.some(mode))
+                }
+            }
+
+            Picker("Desktop Size", selection: postureMoreSpace) {
+                Text("Leave As Set").tag(Bool?.none)
+                Text("Fit This Display").tag(Bool?.some(false))
+                Text("More Space").tag(Bool?.some(true))
+            }
+
+            Picker("Key Row", selection: postureDeck) {
+                Text("Leave As Set").tag(Bool?.none)
+                Text("Out").tag(Bool?.some(true))
+                Text("Put Away").tag(Bool?.some(false))
+            }
+
+            Button("Use These Answers For Every Posture") {
+                settings.postures = .foldableDefaults
+            }
+        } header: {
+            Text("Folding")
+        } footer: {
+            Text("What changes when the phone is held this way; anything left as set stays as it is above. Only a folding phone whose hinge the system reports has a way of being held, so on any other phone these answers are never used.")
+        }
+    }
+
+    private var postureTouchInput: Binding<TouchInputMode?> {
+        postureChoice({ $0.touchInput }, set: { $0.touchInput = $1 })
+    }
+
+    private var postureMoreSpace: Binding<Bool?> {
+        postureChoice({ $0.moreSpace }, set: { $0.moreSpace = $1 })
+    }
+
+    private var postureDeck: Binding<Bool?> {
+        postureChoice({ $0.showsDeck }, set: { $0.showsDeck = $1 })
+    }
+
+    /// One choice of one posture's, read and written through the binding the
+    /// form edits.
+    private func postureChoice<Value>(
+        _ get: @escaping (PosturePresets.Preset) -> Value?,
+        set: @escaping (inout PosturePresets.Preset, Value?) -> Void
+    ) -> Binding<Value?> {
+        Binding {
+            get(settings.postures[self.editedPosture])
+        } set: { value in
+            var preset = settings.postures[self.editedPosture]
+            set(&preset, value)
+            settings.postures[self.editedPosture] = preset
+        }
+    }
+    #endif
 
     private var keyboardSection: some View {
         Section {

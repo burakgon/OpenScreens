@@ -17,6 +17,9 @@ public struct LibraryView: View {
     @State private var showsQuickConnect = false
     @State private var pendingDeletion: Set<Computer.ID> = []
     @State private var showsDeleteConfirmation = false
+    /// Which column a narrow screen shows: the computers, not the list of
+    /// sections, so that the app opens on something to connect to.
+    @State private var compactColumn = NavigationSplitViewColumn.detail
     #if os(iOS)
     @State private var presentedSession: RemoteSession?
     @State private var showsSettings = false
@@ -36,7 +39,7 @@ public struct LibraryView: View {
     }
 
     public var body: some View {
-        NavigationSplitView {
+        NavigationSplitView(preferredCompactColumn: $compactColumn) {
             LibrarySidebar(filter: $filter)
                 .navigationSplitViewColumnWidth(min: 190, ideal: 224, max: 320)
         } detail: {

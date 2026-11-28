@@ -367,6 +367,43 @@ struct SessionEndToEndTests {
         #expect(await waitUntil { session.phase == .connected })
     }
 
+    /// Folding a phone is not an edit to how the computer connects.
+    @Test func aChangeOfPostureIsNotSavedAsASetting() async throws {
+        let (session, server, model) = try await makeSession { computer in
+            computer.settings.postures.folded = PosturePresets.Preset(
+                touchInput: .touch, moreSpace: true)
+        }
+        defer {
+            model.sessions.close(session)
+            server.stop()
+        }
+        session.start()
+        #expect(await waitUntil { session.phase == .connected })
+
+        // Nothing has been said about how the device is held: a phone that
+        // does not fold, or one whose hinge the system does not report.
+        #expect(session.devicePosture == .open)
+        #expect(session.settings.touchInput == .trackpad)
+
+        session.devicePostureChanged(to: .folded)
+        #expect(session.devicePosture == .folded)
+        #expect(session.settings.touchInput == .touch)
+        #expect(session.settings.minimumDesktopSize == CGSize(width: 1024, height: 600))
+
+        // What is saved, and what a settings sheet would edit, is still the
+        // answer for the phone open. Unfolding would otherwise leave the
+        // folded posture behind as though someone had typed it in.
+        #expect(session.computer.settings.touchInput == .trackpad)
+        #expect(session.computer.settings.minimumDesktopSize == CGSize(width: 720, height: 600))
+        let saved = try #require(model.library.computer(session.computer.id))
+        #expect(saved.settings.touchInput == .trackpad)
+
+        // And only what the posture had an opinion about comes apart again.
+        session.devicePostureChanged(to: .open)
+        #expect(session.settings.touchInput == .trackpad)
+        #expect(session.settings.postures.folded.touchInput == .touch)
+    }
+
     @Test func endingASessionDisconnects() async throws {
         let (session, server, model) = try await makeSession()
         defer { server.stop() }

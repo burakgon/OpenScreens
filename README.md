@@ -109,6 +109,9 @@ to the same Macs. What OpenScreens adds:
 
 - Groups, tags, favourites, recents and search, as a grid of screen previews
   or a list.
+- **A computer you get into is kept.** Connect to one from Nearby or by its
+  address and it joins the library the first time you are in, so it is
+  waiting the next time the app opens. One you never got into is not kept.
 - **iCloud sync** keeps it the same on every device. Passwords stay in your
   keychain and never go into the library file, iCloud's copy of it or a
   backup.
@@ -129,6 +132,59 @@ to the same Macs. What OpenScreens adds:
   beyond Remote Login or an SSH server.
 - Live statistics: mode, size, frame rate, bitrate, loss, and how the
   connection is protected.
+
+**A folding iPhone, and a screen plugged into one**
+
+- **The desktop follows how the phone is held.** Folded, half-open and open
+  are three different screens, and a fold passes the window through a run of
+  sizes on the way between them. The request for a desktop to match waits
+  until the size has stopped changing, so one fold asks the Mac once instead
+  of at every step through it, and the new picture dissolves in rather than
+  flashing black.
+- **Stood up half-open, the phone is a laptop.** With the fold across the
+  screen, the desktop is made for the half standing up and fills it, and the
+  half lying down becomes a MacBook's keyboard and trackpad, there the moment
+  the phone is folded and before the connection is made. The keys are held
+  for as long as they are touched, so a shortcut is one too: hold ⌘ and tap
+  C, or hold ⌘ and step through the app switcher with Tab. A modifier tapped
+  on its own waits for the next key, and tapped twice stays on. With no
+  function row, fn and the number row give Escape and F1 to F12.
+- **All of the lower half is the trackpad**, edge to edge, though only its
+  middle is drawn as one. One finger moves and clicks, two scroll and
+  right-click, a pinch zooms, three tap to look a word up, and three or four
+  swipe for Mission Control, App Exposé and Spaces.
+- **Any other way it is held**, the row of modifiers, Esc, Tab and the arrows
+  can be brought out from the toolbar.
+- **Each posture can keep its own answers** — how touches drive the pointer,
+  whether the desktop is sized for the screen or for any Mac window, and
+  whether the row of keys is out — under **Folding** in a computer's
+  settings. They are laid over the computer's own settings instead of
+  changing them, so unfolding cannot leave the folded choices saved behind.
+  Nothing is decided for you until you set it, or press the one button that
+  fills in what is suggested. Stood up as a laptop, the keyboard comes out
+  whatever the row of keys is set to.
+- **Three-finger swipes can drive the Mac** instead of moving the picture:
+  up for Mission Control, down for App Exposé, sideways for the next or
+  previous Space. Off until it is turned on.
+- **A display on the phone's cable takes the desktop** while a computer is
+  open, at that display's size, with the pointer drawn on it. The phone
+  becomes the trackpad, as wide as it is held, and its own keyboard is a tap
+  away for typing, with the row of modifiers, Esc, Tab and the arrows above
+  it. What has to be read or answered — signing in, a computer that could
+  not be reached — stays on the phone, which is the half in your hand. On the
+  library the display shows the phone, so you can see what you are choosing.
+
+<sub>Tried on an iPhone Duo, folded, half-open and stood up like a laptop, and
+with a display on the end of a cable. Going from the inner screen to the
+outer one with a display attached has once closed the app, which has not been
+seen again or explained yet, and a keyboard paired with the phone has not
+been tried with a display attached. The hinge and the display are both read
+from the system, and so want a newer iOS than the app asks for: the hinge is
+iOS 27.1, and iOS 27 to ask a display to be the app's own rather than a mirror
+of the phone. Below those the phone is taken to be open and a display mirrors
+it, as it does today. How long the Mac is left to settle before a new desktop is asked for
+has been watched, not measured, and the dissolve covers Standard mode only —
+High Performance still redraws across a resize.</sub>
 
 **Keeping up to date**
 

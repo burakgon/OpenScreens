@@ -38,3 +38,6 @@ Config/Signing.xcconfig
 
 # Resolved versions of the vendored packages are decided by the app package
 Vendor/*/Package.resolved
+
+# Working plans are kept local
+docs/plans/

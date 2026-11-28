@@ -44,6 +44,8 @@ public struct ConnectionSettings: Codable, Hashable, Sendable {
     /// Send system shortcuts (⌘Tab, ⌘Space, Mission Control…) to the remote
     /// computer while its window is focused.
     public var captureSystemShortcuts: Bool
+    /// What three fingers swiped over the screen do.
+    public var threeFingerSwipes: ThreeFingerSwipeAction
     /// Swap ⌘ and ⌃ for computers that are not Macs.
     public var swapCommandAndControl: Bool
 
@@ -61,6 +63,13 @@ public struct ConnectionSettings: Codable, Hashable, Sendable {
     public var reconnectAutomatically: Bool
     /// Fall back to Standard when High Performance cannot be established.
     public var fallBackToStandard: Bool
+
+    // MARK: Folding
+
+    /// What to change about these settings for each way a folding phone is
+    /// held. Empty on a phone that does not fold, and on one whose hinge the
+    /// system does not report.
+    public var postures: PosturePresets
 
     public init(
         quality: QualityMode = .highPerformance,
@@ -81,6 +90,7 @@ public struct ConnectionSettings: Codable, Hashable, Sendable {
         pointerSpeed: Double = 1.0,
         keyboardInput: KeyboardInputMode = .automatic,
         captureSystemShortcuts: Bool = true,
+        threeFingerSwipes: ThreeFingerSwipeAction = .panPicture,
         swapCommandAndControl: Bool = true,
         sharedClipboard: Bool = true,
         curtainOnConnect: Bool = false,
@@ -88,7 +98,8 @@ public struct ConnectionSettings: Codable, Hashable, Sendable {
         lockOnDisconnect: Bool = false,
         offerPasswordAtLoginWindow: Bool = true,
         reconnectAutomatically: Bool = true,
-        fallBackToStandard: Bool = true
+        fallBackToStandard: Bool = true,
+        postures: PosturePresets = PosturePresets()
     ) {
         self.quality = quality
         self.resolution = resolution
@@ -108,6 +119,7 @@ public struct ConnectionSettings: Codable, Hashable, Sendable {
         self.pointerSpeed = pointerSpeed
         self.keyboardInput = keyboardInput
         self.captureSystemShortcuts = captureSystemShortcuts
+        self.threeFingerSwipes = threeFingerSwipes
         self.swapCommandAndControl = swapCommandAndControl
         self.sharedClipboard = sharedClipboard
         self.curtainOnConnect = curtainOnConnect
@@ -116,6 +128,7 @@ public struct ConnectionSettings: Codable, Hashable, Sendable {
         self.offerPasswordAtLoginWindow = offerPasswordAtLoginWindow
         self.reconnectAutomatically = reconnectAutomatically
         self.fallBackToStandard = fallBackToStandard
+        self.postures = postures
     }
 
     public init(from decoder: any Decoder) throws {
@@ -148,6 +161,7 @@ public struct ConnectionSettings: Codable, Hashable, Sendable {
         pointerSpeed = try number(.pointerSpeed, in: 0.1...10, default: d.pointerSpeed)
         keyboardInput = try c.decodeIfPresent(KeyboardInputMode.self, forKey: .keyboardInput) ?? d.keyboardInput
         captureSystemShortcuts = try c.decodeIfPresent(Bool.self, forKey: .captureSystemShortcuts) ?? d.captureSystemShortcuts
+        threeFingerSwipes = try c.decodeIfPresent(ThreeFingerSwipeAction.self, forKey: .threeFingerSwipes) ?? d.threeFingerSwipes
         swapCommandAndControl = try c.decodeIfPresent(Bool.self, forKey: .swapCommandAndControl) ?? d.swapCommandAndControl
         sharedClipboard = try c.decodeIfPresent(Bool.self, forKey: .sharedClipboard) ?? d.sharedClipboard
         curtainOnConnect = try c.decodeIfPresent(Bool.self, forKey: .curtainOnConnect) ?? d.curtainOnConnect
@@ -156,6 +170,7 @@ public struct ConnectionSettings: Codable, Hashable, Sendable {
         offerPasswordAtLoginWindow = try c.decodeIfPresent(Bool.self, forKey: .offerPasswordAtLoginWindow) ?? d.offerPasswordAtLoginWindow
         reconnectAutomatically = try c.decodeIfPresent(Bool.self, forKey: .reconnectAutomatically) ?? d.reconnectAutomatically
         fallBackToStandard = try c.decodeIfPresent(Bool.self, forKey: .fallBackToStandard) ?? d.fallBackToStandard
+        postures = try c.decodeIfPresent(PosturePresets.self, forKey: .postures) ?? d.postures
     }
 
     /// The smallest desktop, in points, to ask a Mac for when the desktop
@@ -169,6 +184,19 @@ public struct ConnectionSettings: Codable, Hashable, Sendable {
     /// widest window that cannot be made narrower, System Settings.
     public var minimumDesktopSize: CGSize {
         moreSpace ? CGSize(width: 1024, height: 600) : CGSize(width: 720, height: 600)
+    }
+
+    /// These settings with what a folding phone wants for the way it is being
+    /// held laid over the top.
+    ///
+    /// The result is what a session works to while the device is held that
+    /// way, and is never what gets saved: folding a phone is not an edit to
+    /// how the computer connects, and unfolding it would otherwise leave
+    /// behind whatever the folded posture had asked for.
+    public func overlaid(for posture: DevicePosture) -> ConnectionSettings {
+        var copy = self
+        postures[posture].apply(to: &copy)
+        return copy
     }
 
     /// Sensible starting settings for a kind of computer. Only Macs can use

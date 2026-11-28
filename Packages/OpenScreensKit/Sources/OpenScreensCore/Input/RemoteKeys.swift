@@ -355,6 +355,19 @@ public struct RemoteShortcut: Identifiable, Codable, Hashable, Sendable {
 // MARK: - Built-in shortcuts
 
 extension RemoteShortcut {
+    /// What a Mac does when three fingers are swiped on its own trackpad,
+    /// taken from the built-in shortcuts so that the two of them cannot
+    /// disagree about which keys Mission Control answers to.
+    public static func macSystemGesture(for swipe: SwipeDirection) -> RemoteShortcut? {
+        let name: String = switch swipe {
+        case .up: "Mission Control"
+        case .down: "App Exposé"
+        case .left: "Next Space"
+        case .right: "Previous Space"
+        }
+        return macShortcuts.first { $0.name == name }
+    }
+
     /// Shortcuts worth having one tap away for a kind of computer.
     public static func builtIn(for kind: ComputerKind) -> [RemoteShortcut] {
         switch kind {

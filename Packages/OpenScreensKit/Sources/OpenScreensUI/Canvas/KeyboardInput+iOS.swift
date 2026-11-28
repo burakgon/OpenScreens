@@ -221,6 +221,8 @@ struct KeyboardAccessoryBar: View {
 
     let session: RemoteSession
     let bridge: CanvasBridge
+    /// Puts the keyboard away, for a keyboard that is not the canvas's.
+    var onHide: (() -> Void)?
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
@@ -242,7 +244,11 @@ struct KeyboardAccessoryBar: View {
                     AccessoryKeyLabel(text: "F1–12")
                 }
                 Button {
-                    bridge.hideKeyboard()
+                    if let onHide {
+                        onHide()
+                    } else {
+                        bridge.hideKeyboard()
+                    }
                 } label: {
                     AccessoryKeyLabel(symbol: "keyboard.chevron.compact.down")
                 }
